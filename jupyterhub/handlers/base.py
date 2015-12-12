@@ -4,7 +4,7 @@
 # Distributed under the terms of the Modified BSD License.
 
 import re
-from datetime import datetime, timedelta
+from datetime import timedelta
 from http.client import responses
 
 from jinja2 import TemplateNotFound
@@ -16,6 +16,7 @@ from tornado.web import RequestHandler
 from tornado import gen, web
 
 from .. import orm
+from ..user import User
 from ..spawner import LocalProcessSpawner
 from ..utils import url_path_join
 
@@ -53,7 +54,11 @@ class BaseHandler(RequestHandler):
     @property
     def db(self):
         return self.settings['db']
-
+    
+    @property
+    def users(self):
+        return self.settings.setdefault('users', {})
+    
     @property
     def hub(self):
         return self.settings['hub']
@@ -69,8 +74,29 @@ class BaseHandler(RequestHandler):
     def finish(self, *args, **kwargs):
         """Roll back any uncommitted transactions from the handler."""
         self.db.rollback()
-        super(BaseHandler, self).finish(*args, **kwargs)
-
+        super().finish(*args, **kwargs)
+    
+    #---------------------------------------------------------------
+    # Security policies
+    #---------------------------------------------------------------
+    
+    @property
+    def csp_report_uri(self):
+        return self.settings.get('csp_report_uri',
+            url_path_join(self.hub.server.base_url, 'security/csp-report')
+        )
+    
+    @property
+    def content_security_policy(self):
+        """The default Content-Security-Policy header
+        
+        Can be overridden by defining Content-Security-Policy in settings['headers']
+        """
+        return '; '.join([
+            "frame-ancestors 'self'",
+            "report-uri " + self.csp_report_uri,
+        ])
+    
     def set_default_headers(self):
         """
         Set any headers passed as tornado_settings['headers'].
@@ -78,7 +104,8 @@ class BaseHandler(RequestHandler):
         By default sets Content-Security-Policy of frame-ancestors 'self'.
         """
         headers = self.settings.get('headers', {})
-        headers.setdefault('Content-Security-Policy', "frame-ancestors 'self'")
+        headers.setdefault("Content-Security-Policy", self.content_security_policy)
+        
         for header_name, header_content in headers.items():
             self.set_header(header_name, header_content)
 
@@ -123,12 +150,19 @@ class BaseHandler(RequestHandler):
                 clear()
             return
         cookie_id = cookie_id.decode('utf8', 'replace')
-        user = self.db.query(orm.User).filter(orm.User.cookie_id==cookie_id).first()
+        u = self.db.query(orm.User).filter(orm.User.cookie_id==cookie_id).first()
+        user = self._user_from_orm(u)
         if user is None:
             self.log.warn("Invalid cookie token")
             # have cookie, but it's not valid. Clear it and start over.
             clear()
         return user
+    
+    def _user_from_orm(self, orm_user):
+        """return User wrapper from orm.User object"""
+        if orm_user is None:
+            return
+        return self.users[orm_user]
     
     def get_current_user_cookie(self):
         """get_current_user from a cookie token"""
@@ -146,19 +180,25 @@ class BaseHandler(RequestHandler):
         
         return None if no such user
         """
-        return orm.User.find(self.db, name)
+        orm_user = orm.User.find(db=self.db, name=name)
+        return self._user_from_orm(orm_user)
 
     def user_from_username(self, username):
-        """Get ORM User for username"""
+        """Get User for username, creating if it doesn't exist"""
         user = self.find_user(username)
         if user is None:
-            user = orm.User(name=username)
-            self.db.add(user)
+            # not found, create and register user
+            u = orm.User(name=username)
+            self.db.add(u)
             self.db.commit()
+            user = self._user_from_orm(u)
         return user
     
-    def clear_login_cookie(self):
-        user = self.get_current_user()
+    def clear_login_cookie(self, name=None):
+        if name is None:
+            user = self.get_current_user()
+        else:
+            user = self.find_user(name)
         if user and user.server:
             self.clear_cookie(user.server.cookie_name, path=user.server.base_url)
         self.clear_cookie(self.hub.server.cookie_name, path=self.hub.server.base_url)
@@ -234,12 +274,13 @@ class BaseHandler(RequestHandler):
         if user.spawn_pending:
             raise RuntimeError("Spawn already pending for: %s" % user.name)
         tic = IOLoop.current().time()
-        
+
         f = user.spawn(
             spawner_class=self.spawner_class,
             base_url=self.base_url,
             hub=self.hub,
             config=self.config,
+            authenticator=self.authenticator,
         )
         @gen.coroutine
         def finish_user_spawn(f=None):
@@ -395,6 +436,7 @@ class PrefixRedirectHandler(BaseHandler):
             self.hub.server.base_url, path,
         ), permanent=False)
 
+
 class UserSpawnHandler(BaseHandler):
     """Requests to /user/name handled by the Hub
     should result in spawning the single-user server and
@@ -432,6 +474,15 @@ class UserSpawnHandler(BaseHandler):
                 {'next': self.request.uri,
             }))
 
+class CSPReportHandler(BaseHandler):
+    '''Accepts a content security policy violation report'''
+    @web.authenticated
+    def post(self):
+        '''Log a content security policy violation report'''
+        self.log.warn("Content security violation: %s",
+                      self.request.body.decode('utf8', 'replace'))
+
 default_handlers = [
     (r'/user/([^/]+)/?.*', UserSpawnHandler),
+    (r'/security/csp-report', CSPReportHandler),
 ]

@@ -17,24 +17,35 @@ from jinja2 import ChoiceLoader, FunctionLoader
 from tornado import ioloop
 from tornado.web import HTTPError
 
+
 from IPython.utils.traitlets import (
     Integer,
     Unicode,
     CUnicode,
 )
 
-from IPython.html.notebookapp import NotebookApp, aliases as notebook_aliases
-from IPython.html.auth.login import LoginHandler
-from IPython.html.auth.logout import LogoutHandler
+try:
+    import notebook
+    # 4.x
+except ImportError:
+    from IPython.html.notebookapp import NotebookApp, aliases as notebook_aliases
+    from IPython.html.auth.login import LoginHandler
+    from IPython.html.auth.logout import LogoutHandler
 
-from IPython.html.utils import url_path_join
+    from IPython.html.utils import url_path_join
 
+    from distutils.version import LooseVersion as V
 
-from distutils.version import LooseVersion as V
+    import IPython
+    if V(IPython.__version__) < V('3.0'):
+        raise ImportError("JupyterHub Requires IPython >= 3.0, found %s" % IPython.__version__)
+else:
+    from notebook.notebookapp import NotebookApp, aliases as notebook_aliases
+    from notebook.auth.login import LoginHandler
+    from notebook.auth.logout import LogoutHandler
 
-import IPython
-if V(IPython.__version__) < V('3.0'):
-    raise ImportError("JupyterHub Requires IPython >= 3.0, found %s" % IPython.__version__)
+    from notebook.utils import url_path_join
+
 
 # Define two methods to attach to AuthenticatedHandler,
 # which authenticate via the central auth server.
@@ -194,6 +205,7 @@ class SingleUserNotebookApp(NotebookApp):
         s['cookie_name'] = self.cookie_name
         s['login_url'] = self.hub_prefix
         s['hub_api_url'] = self.hub_api_url
+        s['csp_report_uri'] = url_path_join(self.hub_prefix, 'security/csp-report')
         
         super(SingleUserNotebookApp, self).init_webapp()
         self.patch_templates()

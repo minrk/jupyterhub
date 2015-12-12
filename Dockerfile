@@ -5,9 +5,13 @@
 # FROM jupyter/jupyterhub:latest
 #
 
-FROM ipython/ipython
+FROM jupyter/notebook
 
 MAINTAINER Jupyter Project <jupyter@googlegroups.com>
+
+# install nodejs
+ENV DEBIAN_FRONTEND noninteractive
+RUN apt-get -y update && apt-get -y upgrade && apt-get -y install npm nodejs nodejs-legacy
 
 # install js dependencies
 RUN npm install -g configurable-http-proxy

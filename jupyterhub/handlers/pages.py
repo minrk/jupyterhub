@@ -8,6 +8,7 @@ from tornado import web
 from .. import orm
 from ..utils import admin_only, url_path_join
 from .base import BaseHandler
+from .login import LoginHandler
 
 
 class RootHandler(BaseHandler):
@@ -25,15 +26,15 @@ class RootHandler(BaseHandler):
         if user:
             if user.running:
                 url = user.server.base_url
+                self.log.debug("User is running: %s", url)
             else:
                 url = url_path_join(self.hub.server.base_url, 'home')
-            self.redirect(url, permanent=False)
+                self.log.debug("User is not running: %s", url)
+            self.redirect(url)
             return
-        html = self.render_template('login.html',
-            login_url=self.settings['login_url'],
-            custom_html=self.authenticator.custom_html,
-        )
-        self.finish(html)
+        url = url_path_join(self.hub.server.base_url, 'login')
+        self.redirect(url)
+
 
 class HomeHandler(BaseHandler):
     """Render the user's home page."""
@@ -89,7 +90,8 @@ class AdminHandler(BaseHandler):
         ordered = [ getattr(c, o)() for c, o in zip(cols, orders) ]
         
         users = self.db.query(orm.User).order_by(*ordered)
-        running = users.filter(orm.User.server != None)
+        users = [ self._user_from_orm(u) for u in users ]
+        running = [ u for u in users if u.running ]
         
         html = self.render_template('admin.html',
             user=self.get_current_user(),

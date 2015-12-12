@@ -4,17 +4,21 @@
 # Distributed under the terms of the Modified BSD License.
 
 from grp import getgrnam
+import pipes
 import pwd
-from subprocess import check_call, check_output, CalledProcessError
+from shutil import which
+import sys
+from subprocess import check_call
 
 from tornado import gen
-import simplepam
+import pamela
 
 from traitlets.config import LoggingConfigurable
 from traitlets import Bool, Set, Unicode, Any
 
 from .handlers.login import LoginHandler
 from .utils import url_path_join
+from .traitlets import Command
 
 class Authenticator(LoggingConfigurable):
     """A class for authentication.
@@ -58,6 +62,18 @@ class Authenticator(LoggingConfigurable):
         and return None on failed authentication.
         """
 
+    def pre_spawn_start(self, user, spawner):
+        """Hook called before spawning a user's server.
+        
+        Can be used to do auth-related startup, e.g. opening PAM sessions.
+        """
+    
+    def post_spawn_stop(self, user, spawner):
+        """Hook called after stopping a user container.
+        
+        Can be used to do auth-related cleanup, e.g. closing PAM sessions.
+        """
+    
     def check_whitelist(self, user):
         """
         Return True if the whitelist is empty or user is in the whitelist.
@@ -111,6 +127,36 @@ class LocalAuthenticator(Authenticator):
         should I try to create the system user?
         """
     )
+    add_user_cmd = Command(config=True,
+        help="""The command to use for creating users as a list of strings.
+        
+        For each element in the list, the string USERNAME will be replaced with
+        the user's username. The username will also be appended as the final argument.
+        
+        For Linux, the default value is:
+        
+            ['adduser', '-q', '--gecos', '""', '--disabled-password']
+            
+        To specify a custom home directory, set this to:
+        
+            ['adduser', '-q', '--gecos', '""', '--home', '/customhome/USERNAME', '--disabled-password']
+
+        This will run the command:
+
+        adduser -q --gecos "" --home /customhome/river --disabled-password river
+        
+        when the user 'river' is created.
+        """
+    )
+    def _add_user_cmd_default(self):
+        if sys.platform == 'darwin':
+            raise ValueError("I don't know how to create users on OS X")
+        elif which('pw'):
+            # Probably BSD
+            return ['pw', 'useradd', '-m']
+        else:
+            # This appears to be the Linux non-interactive adduser command:
+            return ['adduser', '-q', '--gecos', '""', '--disabled-password']
 
     group_whitelist = Set(
         config=True,
@@ -170,24 +216,12 @@ class LocalAuthenticator(Authenticator):
         else:
             return True
     
-    @staticmethod
-    def add_system_user(user):
+    def add_system_user(self, user):
         """Create a new *ix user on the system. Works on FreeBSD and Linux, at least."""
         name = user.name
-        for useradd in (
-            ['pw', 'useradd', '-m'],
-            ['useradd', '-m'],
-        ):
-            try:
-                check_output(['which', useradd[0]])
-            except CalledProcessError:
-                continue
-            else:
-                break
-        else:
-            raise RuntimeError("I don't know how to add users on this system.")
-    
-        check_call(useradd + [name])
+        cmd = [ arg.replace('USERNAME', name) for arg in self.add_user_cmd ] + [name]
+        self.log.info("Creating user: %s", ' '.join(map(pipes.quote, cmd)))
+        check_call(cmd)
 
 
 class PAMAuthenticator(LocalAuthenticator):
@@ -208,10 +242,27 @@ class PAMAuthenticator(LocalAuthenticator):
         username = data['username']
         if not self.check_whitelist(username):
             return
-        # simplepam wants bytes, not unicode
-        # see simplepam#3
-        busername = username.encode(self.encoding)
-        bpassword = data['password'].encode(self.encoding)
-        if simplepam.authenticate(busername, bpassword, service=self.service):
+        try:
+            pamela.authenticate(username, data['password'], service=self.service)
+        except pamela.PAMError as e:
+            if handler is not None:
+                self.log.warn("PAM Authentication failed (@%s): %s", handler.request.remote_ip, e)
+            else:
+                self.log.warn("PAM Authentication failed: %s", e)
+        else:
             return username
+    
+    def pre_spawn_start(self, user, spawner):
+        """Open PAM session for user"""
+        try:
+            pamela.open_session(user.name, service=self.service)
+        except pamela.PAMError as e:
+            self.log.warn("Failed to open PAM session for %s: %s", user.name, e)
+    
+    def post_spawn_stop(self, user, spawner):
+        """Close PAM session for user"""
+        try:
+            pamela.close_session(user.name, service=self.service)
+        except pamela.PAMError as e:
+            self.log.warn("Failed to close PAM session for %s: %s", user.name, e)
     

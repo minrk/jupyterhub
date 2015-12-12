@@ -11,6 +11,7 @@ import os
 import signal
 import socket
 import sys
+import threading
 from datetime import datetime
 from distutils.version import LooseVersion as V
 from getpass import getuser
@@ -44,6 +45,7 @@ from . import handlers, apihandlers
 from .handlers.static import CacheControlStaticFilesHandler
 
 from . import orm
+from .user import User, UserDict
 from ._data import DATA_FILES_PATH
 from .log import CoroutineLogFormatter, log_request
 from .traitlets import URLPrefix, Command
@@ -346,8 +348,11 @@ class JupyterHub(Application):
     debug_db = Bool(False, config=True,
         help="log all database transactions. This has A LOT of output"
     )
-    db = Any()
     session_factory = Any()
+    
+    users = Instance(UserDict)
+    def _users_default(self):
+        return UserDict(db_factory=lambda : self.db)
     
     admin_access = Bool(False, config=True,
         help="""Grant admin users permission to access single-user servers.
@@ -464,13 +469,12 @@ class JupyterHub(Application):
     
     def init_handlers(self):
         h = []
-        h.extend(handlers.default_handlers)
-        h.extend(apihandlers.default_handlers)
         # load handlers from the authenticator
         h.extend(self.authenticator.get_handlers(self))
-
+        # set default handlers
+        h.extend(handlers.default_handlers)
+        h.extend(apihandlers.default_handlers)
         self.handlers = self.add_url_prefix(self.hub_prefix, h)
-
         # some extra handlers, outside hub_prefix
         self.handlers.extend([
             (r"%s" % self.hub_prefix.rstrip('/'), web.RedirectHandler,
@@ -540,6 +544,40 @@ class JupyterHub(Application):
         # store the loaded trait value
         self.cookie_secret = secret
     
+    # thread-local storage of db objects
+    _local = Instance(threading.local, ())
+    @property
+    def db(self):
+        if not hasattr(self._local, 'db'):
+            self._local.db = scoped_session(self.session_factory)()
+        return self._local.db
+    
+    @property
+    def hub(self):
+        if not getattr(self._local, 'hub', None):
+            q = self.db.query(orm.Hub)
+            assert q.count() <= 1
+            self._local.hub = q.first()
+        return self._local.hub
+    
+    @hub.setter
+    def hub(self, hub):
+        self._local.hub = hub
+    
+    @property
+    def proxy(self):
+        if not getattr(self._local, 'proxy', None):
+            q = self.db.query(orm.Proxy)
+            assert q.count() <= 1
+            p = self._local.proxy = q.first()
+            if p:
+                p.auth_token = self.proxy_auth_token
+        return self._local.proxy
+    
+    @proxy.setter
+    def proxy(self, proxy):
+        self._local.proxy = proxy
+    
     def init_db(self):
         """Create the database connection"""
         self.log.debug("Connecting to db: %s", self.db_url)
@@ -550,7 +588,8 @@ class JupyterHub(Application):
                 echo=self.debug_db,
                 **self.db_kwargs
             )
-            self.db = scoped_session(self.session_factory)()
+            # trigger constructing thread local db property
+            _ = self.db
         except OperationalError as e:
             self.log.error("Failed to connect to db: %s", self.db_url)
             self.log.debug("Database error was:", exc_info=True)
@@ -593,10 +632,8 @@ class JupyterHub(Application):
         admin_users = self.authenticator.admin_users
         
         if not admin_users:
-            # add current user as admin if there aren't any others
-            admins = db.query(orm.User).filter(orm.User.admin==True)
-            if admins.first() is None:
-                admin_users.add(getuser())
+            self.log.warning("No admin users, admin interface will be unavailable.")
+            self.log.warning("Add any administrative users to `c.Authenticator.admin_users` in config.")
         
         new_users = []
 
@@ -667,7 +704,8 @@ class JupyterHub(Application):
             yield self.proxy.delete_user(user)
             yield user.stop()
         
-        for user in db.query(orm.User):
+        for orm_user in db.query(orm.User):
+            self.users[orm_user.id] = user = User(orm_user)
             if not user.state:
                 # without spawner state, server isn't valid
                 user.server = None
@@ -676,6 +714,7 @@ class JupyterHub(Application):
             self.log.debug("Loading state for %s from db", user.name)
             user.spawner = spawner = self.spawner_class(
                 user=user, hub=self.hub, config=self.config, db=self.db,
+                authenticator=self.authenticator,
             )
             status = yield spawner.poll()
             if status is None:
@@ -821,6 +860,7 @@ class JupyterHub(Application):
             proxy=self.proxy,
             hub=self.hub,
             admin_users=self.authenticator.admin_users,
+            users=self.users,
             admin_access=self.admin_access,
             authenticator=self.authenticator,
             spawner_class=self.spawner_class,
@@ -888,7 +928,7 @@ class JupyterHub(Application):
         if self.cleanup_servers:
             self.log.info("Cleaning up single-user servers...")
             # request (async) process termination
-            for user in self.db.query(orm.User):
+            for uid, user in self.users.items():
                 if user.spawner is not None:
                     futures.append(user.stop())
         else:

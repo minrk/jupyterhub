@@ -16,6 +16,9 @@ class LogoutHandler(BaseHandler):
         if user:
             self.log.info("User logged out: %s", user.name)
         self.clear_login_cookie()
+        for name in user.other_user_cookies:
+            self.clear_login_cookie(name)
+        user.other_user_cookies = set([])
         self.redirect(self.hub.server.base_url, permanent=False)
 
 
@@ -28,10 +31,14 @@ class LoginHandler(BaseHandler):
                 username=username,
                 login_error=login_error,
                 custom_login_form=self.authenticator.custom_html,
+                login_url=self.settings['login_url'],
         )
     
     def get(self):
-        next_url = self.get_argument('next', False)
+        next_url = self.get_argument('next', '')
+        if not next_url.startswith('/'):
+            # disallow non-absolute next URLs (e.g. full URLs)
+            next_url = ''
         user = self.get_current_user()
         if user:
             if not next_url:
@@ -54,9 +61,8 @@ class LoginHandler(BaseHandler):
         for arg in self.request.arguments:
             data[arg] = self.get_argument(arg)
 
-        username = data['username']
-        authorized = yield self.authenticate(data)
-        if authorized:
+        username = yield self.authenticate(data)
+        if username:
             user = self.user_from_username(username)
             already_running = False
             if user.spawner:
@@ -65,7 +71,10 @@ class LoginHandler(BaseHandler):
             if not already_running:
                 yield self.spawn_single_user(user)
             self.set_login_cookie(user)
-            next_url = self.get_argument('next', default='') or self.hub.server.base_url
+            next_url = self.get_argument('next', default='')
+            if not next_url.startswith('/'):
+                next_url = ''
+            next_url = next_url or self.hub.server.base_url
             self.redirect(next_url)
             self.log.info("User logged in: %s", username)
         else:
@@ -79,5 +88,6 @@ class LoginHandler(BaseHandler):
 
 # Only logout is a default handler.
 default_handlers = [
+    (r"/login", LoginHandler),
     (r"/logout", LogoutHandler),
 ]

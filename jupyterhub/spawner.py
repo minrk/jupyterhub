@@ -7,11 +7,10 @@ import errno
 import os
 import pipes
 import pwd
-import re
 import signal
 import sys
 import grp
-from subprocess import Popen, check_output, PIPE, CalledProcessError
+from subprocess import Popen
 from tempfile import TemporaryDirectory
 
 from tornado import gen
@@ -19,13 +18,11 @@ from tornado.ioloop import IOLoop, PeriodicCallback
 
 from traitlets.config import LoggingConfigurable
 from traitlets import (
-    Any, Bool, Dict, Enum, Instance, Integer, Float, List, Unicode,
+    Any, Bool, Dict, Instance, Integer, Float, List, Unicode,
 )
 
 from .traitlets import Command
 from .utils import random_port
-
-NUM_PAT = re.compile(r'\d+')
 
 class Spawner(LoggingConfigurable):
     """Base class for spawning single-user notebook servers.
@@ -42,6 +39,7 @@ class Spawner(LoggingConfigurable):
     db = Any()
     user = Any()
     hub = Any()
+    authenticator = Any()
     api_token = Unicode()
     ip = Unicode('localhost', config=True,
         help="The IP address (or hostname) the single-user server should listen on"
@@ -254,7 +252,7 @@ class Spawner(LoggingConfigurable):
             if status is not None:
                 break
             else:
-                yield gen.Task(loop.add_timeout, loop.time() + self.death_interval)
+                yield gen.sleep(self.death_interval)
 
 def _try_setcwd(path):
     """Try to set CWD, walking up and ultimately falling back to a temp dir"""

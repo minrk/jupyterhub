@@ -3,13 +3,16 @@
 import json
 import time
 from datetime import timedelta
+from queue import Queue
+from urllib.parse import urlparse
 
 import requests
 
 from tornado import gen
 
-from ..utils import url_path_join as ujoin
 from .. import orm
+from ..user import User
+from ..utils import url_path_join as ujoin
 from . import mocking
 
 
@@ -39,11 +42,15 @@ def check_db_locks(func):
 def find_user(db, name):
     return db.query(orm.User).filter(orm.User.name==name).first()
     
-def add_user(db, **kwargs):
-    user = orm.User(**kwargs)
-    db.add(user)
+def add_user(db, app=None, **kwargs):
+    orm_user = orm.User(**kwargs)
+    db.add(orm_user)
     db.commit()
-    return user
+    if app:
+        user = app.users[orm_user.id] = User(orm_user)
+        return user
+    else:
+        return orm_user
 
 def auth_header(db, name):
     user = find_user(db, name)
@@ -65,7 +72,9 @@ def api_request(app, *api_path, **kwargs):
     method = kwargs.pop('method', 'get')
     f = getattr(requests, method)
     resp = f(url, **kwargs)
-    assert resp.headers['Content-Security-Policy'] == "frame-ancestors 'self'"
+    assert "frame-ancestors 'self'" in resp.headers['Content-Security-Policy']
+    assert ujoin(app.hub.server.base_url, "security/csp-report") in resp.headers['Content-Security-Policy']
+    assert 'http' not in resp.headers['Content-Security-Policy']
     return resp
 
 def test_auth_api(app):
@@ -93,6 +102,51 @@ def test_auth_api(app):
         headers={'Authorization': 'token: %s' % user.cookie_id},
     )
     assert r.status_code == 403
+
+
+def test_referer_check(app, io_loop):
+    url = app.hub.server.url
+    host = urlparse(url).netloc
+    user = find_user(app.db, 'admin')
+    if user is None:
+        user = add_user(app.db, name='admin', admin=True)
+    cookies = app.login_user('admin')
+    app_user = get_app_user(app, 'admin')
+    # stop the admin's server so we don't mess up future tests
+    io_loop.run_sync(lambda : app.proxy.delete_user(app_user))
+    io_loop.run_sync(app_user.stop)
+    
+    r = api_request(app, 'users',
+        headers={
+            'Authorization': '',
+            'Referer': 'null',
+        }, cookies=cookies,
+    )
+    assert r.status_code == 403
+    r = api_request(app, 'users',
+        headers={
+            'Authorization': '',
+            'Referer': 'http://attack.com/csrf/vulnerability',
+        }, cookies=cookies,
+    )
+    assert r.status_code == 403
+    r = api_request(app, 'users',
+        headers={
+            'Authorization': '',
+            'Referer': url,
+            'Host': host,
+        }, cookies=cookies,
+    )
+    assert r.status_code == 200
+    r = api_request(app, 'users',
+        headers={
+            'Authorization': '',
+            'Referer': ujoin(url, 'foo/bar/baz/bat'),
+            'Host': host,
+        }, cookies=cookies,
+    )
+    assert r.status_code == 200
+
 
 def test_get_users(app):
     db = app.db
@@ -254,17 +308,32 @@ def test_make_admin(app):
     assert user.name == name
     assert user.admin
 
+def get_app_user(app, name):
+    """Get the User object from the main thread
+    
+    Needed for access to the Spawner.
+    No ORM methods should be called on the result.
+    """
+    q = Queue()
+    def get_user_id():
+        user = find_user(app.db, name)
+        q.put(user.id)
+    app.io_loop.add_callback(get_user_id)
+    user_id = q.get(timeout=2)
+    return app.users[user_id]
 
 def test_spawn(app, io_loop):
     db = app.db
     name = 'wash'
-    user = add_user(db, name=name)
+    user = add_user(db, app=app, name=name)
+    
     r = api_request(app, 'users', name, 'server', method='post')
     assert r.status_code == 201
     assert 'pid' in user.state
-    assert user.spawner is not None
-    assert not user.spawn_pending
-    status = io_loop.run_sync(user.spawner.poll)
+    app_user = get_app_user(app, name)
+    assert app_user.spawner is not None
+    assert not app_user.spawn_pending
+    status = io_loop.run_sync(app_user.spawner.poll)
     assert status is None
     
     assert user.server.base_url == '/user/%s' % name
@@ -282,7 +351,7 @@ def test_spawn(app, io_loop):
     assert r.status_code == 204
     
     assert 'pid' not in user.state
-    status = io_loop.run_sync(user.spawner.poll)
+    status = io_loop.run_sync(app_user.spawner.poll)
     assert status == 0
 
 def test_slow_spawn(app, io_loop):
@@ -292,45 +361,45 @@ def test_slow_spawn(app, io_loop):
 
     db = app.db
     name = 'zoe'
-    user = add_user(db, name=name)
+    user = add_user(db, app=app, name=name)
     r = api_request(app, 'users', name, 'server', method='post')
     r.raise_for_status()
     assert r.status_code == 202
-    assert user.spawner is not None
-    assert user.spawn_pending
-    assert not user.stop_pending
+    app_user = get_app_user(app, name)
+    assert app_user.spawner is not None
+    assert app_user.spawn_pending
+    assert not app_user.stop_pending
     
-    dt = timedelta(seconds=0.1)
     @gen.coroutine
     def wait_spawn():
-        while user.spawn_pending:
-            yield gen.Task(io_loop.add_timeout, dt)
+        while app_user.spawn_pending:
+            yield gen.sleep(0.1)
     
     io_loop.run_sync(wait_spawn)
-    assert not user.spawn_pending
-    status = io_loop.run_sync(user.spawner.poll)
+    assert not app_user.spawn_pending
+    status = io_loop.run_sync(app_user.spawner.poll)
     assert status is None
 
     @gen.coroutine
     def wait_stop():
-        while user.stop_pending:
-            yield gen.Task(io_loop.add_timeout, dt)
+        while app_user.stop_pending:
+            yield gen.sleep(0.1)
 
     r = api_request(app, 'users', name, 'server', method='delete')
     r.raise_for_status()
     assert r.status_code == 202
-    assert user.spawner is not None
-    assert user.stop_pending
+    assert app_user.spawner is not None
+    assert app_user.stop_pending
 
     r = api_request(app, 'users', name, 'server', method='delete')
     r.raise_for_status()
     assert r.status_code == 202
-    assert user.spawner is not None
-    assert user.stop_pending
+    assert app_user.spawner is not None
+    assert app_user.stop_pending
     
     io_loop.run_sync(wait_stop)
-    assert not user.stop_pending
-    assert user.spawner is not None
+    assert not app_user.stop_pending
+    assert app_user.spawner is not None
     r = api_request(app, 'users', name, 'server', method='delete')
     assert r.status_code == 400
     
@@ -341,20 +410,20 @@ def test_never_spawn(app, io_loop):
 
     db = app.db
     name = 'badger'
-    user = add_user(db, name=name)
+    user = add_user(db, app=app, name=name)
     r = api_request(app, 'users', name, 'server', method='post')
-    assert user.spawner is not None
-    assert user.spawn_pending
+    app_user = get_app_user(app, name)
+    assert app_user.spawner is not None
+    assert app_user.spawn_pending
     
-    dt = timedelta(seconds=0.1)
     @gen.coroutine
     def wait_pending():
-        while user.spawn_pending:
-            yield gen.Task(io_loop.add_timeout, dt)
+        while app_user.spawn_pending:
+            yield gen.sleep(0.1)
     
     io_loop.run_sync(wait_pending)
-    assert not user.spawn_pending
-    status = io_loop.run_sync(user.spawner.poll)
+    assert not app_user.spawn_pending
+    status = io_loop.run_sync(app_user.spawner.poll)
     assert status is not None
 
 

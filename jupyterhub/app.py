@@ -363,7 +363,6 @@ class JupyterHub(Application):
     @default('base_url')
     def _default_base_url(self):
         # call validate to ensure leading/trailing slashes
-        print(self.bind_url)
         return JupyterHub.base_url.validate(self, urlparse(self.bind_url).path)
 
     subdomain_host = Unicode('',
@@ -496,6 +495,7 @@ class JupyterHub(Application):
         .. seealso::
             JupyterHub.hub_connect_ip
             JupyterHub.hub_bind_url
+
         .. versionadded:: 0.9
         """
     )

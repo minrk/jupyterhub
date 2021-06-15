@@ -219,7 +219,7 @@ jobs:
         # FIXME: --color=yes explicitly set because:
         #        https://github.com/actions/runner/issues/241
         run: |
-          pytest -vs --maxfail=2 --color=yes --cov=jupyterhub jupyterhub/tests
+          pytest -vs --maxfail=2 --color=yes --cov=jupyterhub jupyterhub/tests/test_pages.py
       - name: Run yarn jest test
         run: |
           cd jsx && yarn && yarn test
@@ -228,6 +228,7 @@ jobs:
           codecov
 
   docker-build:
+    if: false
     runs-on: ubuntu-20.04
     timeout-minutes: 10
 

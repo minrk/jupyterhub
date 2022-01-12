@@ -57,13 +57,13 @@ async def test_default_server(app, named_servers):
             'name': username,
             'roles': ['user'],
             'auth_state': None,
-            'server': user.url,
+            'server': user.server_url(),
             'servers': {
                 '': {
                     'name': '',
                     'started': TIMESTAMP,
                     'last_activity': TIMESTAMP,
-                    'url': user.url,
+                    'url': user.server_url(),
                     'pending': None,
                     'ready': True,
                     'progress_url': 'PREFIX/hub/api/users/{}/server/progress'.format(
@@ -124,7 +124,7 @@ async def test_create_named_server(app, named_servers):
                     'name': name,
                     'started': TIMESTAMP,
                     'last_activity': TIMESTAMP,
-                    'url': url_path_join(user.url, name, '/'),
+                    'url': user.server_url(),
                     'pending': None,
                     'ready': True,
                     'progress_url': 'PREFIX/hub/api/users/{}/servers/{}/progress'.format(
@@ -339,7 +339,7 @@ async def test_user_redirect_hook_default_server_name(
         )
         # exclude custom server_name
         # custom hook is respected exactly
-        url = url_path_join(user.url, '/terminals/1')
+        url = url_path_join(user.serve_url(), '/terminals/1')
         return url
 
     app.user_redirect_hook = dummy_redirect

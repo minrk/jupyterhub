@@ -200,7 +200,7 @@ class APIHandler(BaseHandler):
             'started': isoformat(spawner.orm_spawner.started),
             'pending': spawner.pending,
             'ready': spawner.ready,
-            'url': url_path_join(spawner.user.url, spawner.name, '/'),
+            'url': spawner.user.server_url(spawner.name),
             'user_options': spawner.user_options,
             'progress_url': spawner._progress_url,
         }
@@ -260,7 +260,7 @@ class APIHandler(BaseHandler):
             'admin': user.admin,
             'roles': [r.name for r in user.roles],
             'groups': [g.name for g in user.groups],
-            'server': user.url if user.running else None,
+            'server': user.server_url() if user.running else None,
             'pending': None,
             'created': isoformat(user.created),
             'last_activity': isoformat(user.last_activity),

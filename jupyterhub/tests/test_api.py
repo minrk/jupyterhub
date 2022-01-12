@@ -1091,7 +1091,7 @@ async def test_progress(request, app, no_patience, slow_spawn):
     evt = await ex.submit(next_event, line_iter)
     assert evt == {'progress': 50, 'message': 'Spawning server...'}
     evt = await ex.submit(next_event, line_iter)
-    url = app_user.url
+    url = app_user.server_url("")
     assert evt == {
         'progress': 100,
         'message': f'Server ready at {url}',
@@ -1142,7 +1142,7 @@ async def test_progress_ready(request, app):
     evt = await ex.submit(next_event, line_iter)
     assert evt['progress'] == 100
     assert evt['ready']
-    assert evt['url'] == app_user.url
+    assert evt['url'] == app_user.server_url()
 
 
 async def test_progress_bad(request, app, bad_spawn):

@@ -489,9 +489,11 @@ class User:
 
     @property
     def url(self):
-        """My URL
+        """My base URL
 
         Full name.domain/path if using subdomains, otherwise just my /base/url
+
+        Use `.server_url` to get the URL of a running server.
         """
         if self.settings.get('subdomain_host'):
             return f'{self.host}{self.base_url}'
@@ -499,11 +501,33 @@ class User:
             return self.base_url
 
     def server_url(self, server_name=''):
-        """Get the url for a server with a given name"""
+        """Get the url for a server with a given name
+
+        May only be called if the server is running.
+        """
+        # prevent this from being called if the server is not ready
+        # this is in anticipation of spawner-controlled URLs
+        if server_name not in self.spawners:
+            raise RuntimeError(f"Cannot access server_url for a not-ready server: {self.name}{server_name}")
+        spawner = self.spawners[server_name]
+        if not spawner.ready:
+            raise RuntimeError(f"Cannot access server_url for a not-ready server: {self.name}{server_name} is pending {spawner.pending}")
+
         if not server_name:
             return self.url
         else:
-            return url_path_join(self.url, server_name)
+            return url_path_join(self.url, server_name, "/")
+
+    def spawn_url(self, server_name=""):
+        """Return URL for spawning a given server
+
+        Visiting the SpawnHandler will redirect to the appropriate spawn-pending or running-server pages
+        if a server is already active or ready,
+        so this should generally be a safer redirect destination than .server_url.
+
+        .. versionadded:: 2.1
+        """
+        return url_path_join(self.settings['hub'].base_url, 'spawn', self.escaped_name, server_name)
 
     def progress_url(self, server_name=''):
         """API URL for progress endpoint for a server with a given name"""

@@ -696,12 +696,14 @@ class BaseHandler(RequestHandler):
             # if self.redirect_to_server, default login URL initiates spawn,
             # otherwise send to Hub home page (control panel)
             if user and self.redirect_to_server:
-                if user.spawner.active:
-                    # server is active, send to the user url
-                    next_url = user.url
+                # redirect to the spawn
+                server_name = self.app.default_server_name
+                if server_name in user.spawners and user.spawners[server_name].ready:
+                    # server is ready, send to the user url
+                    next_url = user.server_url(server_name)
                 else:
-                    # send to spawn url
-                    next_url = url_path_join(self.hub.base_url, 'spawn')
+                    # otherwise, send to the spawn url (this will redirect further if spawn is already pending)
+                    next_url = user.spawn_url(server_name)
             else:
                 next_url = url_path_join(self.hub.base_url, 'home')
 
@@ -1539,7 +1541,7 @@ class UserUrlHandler(BaseHandler):
         # page *in* the server is not found, we return a 424 instead of a 404.
         # We allow retaining the old behavior to support older JupyterLab versions
         spawn_url = url_concat(
-            url_path_join(self.hub.base_url, "spawn", user.escaped_name, server_name),
+            user.spawn_url(server_name),
             {"next": self.request.uri},
         )
         self.set_status(
@@ -1650,31 +1652,33 @@ class UserRedirectHandler(BaseHandler):
             )
         if url is None:
             user = self.current_user
-            user_url = user.url
 
-            if self.app.default_server_name:
-                user_url = url_path_join(user_url, self.app.default_server_name)
+            server_name = self.app.default_server_name
+            if server_name in user.spawners and user.spawners[server_name].ready:
+                # already ready, redirect
+                user_url = user.server_url(server_name)
+                ready = True
+            else:
+                ready = False
+                # redirect back to `/hub/user/...` to avoid calls to .server_url for a not-running server
+                # /hub/user/... will redirect to the running server when it's ready
+                user_url = url_path_join(
+                    self.hub.base_url, "user", user.escaped_name, server_name
+                )
 
             user_url = url_path_join(user_url, path)
             if self.request.query:
                 user_url = url_concat(user_url, parse_qsl(self.request.query))
 
-            if self.app.default_server_name:
-                url = url_concat(
-                    url_path_join(
-                        self.hub.base_url,
-                        "spawn",
-                        user.escaped_name,
-                        self.app.default_server_name,
-                    ),
-                    {"next": user_url},
-                )
+            if ready:
+                # redirect to running server
+                url = user_url
             else:
+                # redirect to spawn, followed by the desired url on the running server
                 url = url_concat(
-                    url_path_join(self.hub.base_url, "spawn", user.escaped_name),
+                    user.spawn_url(server_name),
                     {"next": user_url},
                 )
-
         self.redirect(url)
 
 

@@ -62,10 +62,10 @@ class HomeHandler(BaseHandler):
         # send the user to /spawn if they have no active servers,
         # to establish that this is an explicit spawn request rather
         # than an implicit one, which can be caused by any link to `/user/:name(/:server_name)`
-        if user.active:
-            url = url_path_join(self.base_url, 'user', user.escaped_name)
+        if user.running:
+            url = user.server_url()
         else:
-            url = url_path_join(self.hub.base_url, 'spawn', user.escaped_name)
+            url = user.spawn_url()
 
         auth_state = await user.get_auth_state()
         html = await self.render_template(
@@ -380,9 +380,7 @@ class SpawnPendingHandler(BaseHandler):
             # We should point the user to Home if the most recent spawn failed.
             exc = spawner._spawn_future.exception()
             self.log.error("Previous spawn for %s failed: %s", spawner._log_name, exc)
-            spawn_url = url_path_join(
-                self.hub.base_url, "spawn", user.escaped_name, server_name
-            )
+            spawn_url = user.spawn_url(server_name)
             self.set_status(500)
             html = await self.render_template(
                 "not_running.html",
@@ -432,9 +430,7 @@ class SpawnPendingHandler(BaseHandler):
         # further, set status to 404 because this is not
         # serving the expected page
         if status is not None:
-            spawn_url = url_path_join(
-                self.hub.base_url, "spawn", user.escaped_name, server_name
-            )
+            spawn_url = user.spawn_url(server_name)
             html = await self.render_template(
                 "not_running.html",
                 user=user,

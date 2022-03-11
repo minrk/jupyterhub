@@ -40,9 +40,11 @@ from sqlalchemy.types import Text
 from sqlalchemy.types import TypeDecorator
 from tornado.log import app_log
 
+from .roles import _check_scopes
 from .roles import assign_default_roles
 from .roles import create_role
 from .roles import get_default_roles
+from .roles import roles_to_scopes
 from .roles import update_roles
 from .utils import compare_token
 from .utils import hash_token
@@ -110,7 +112,9 @@ class JSONList(JSONDict):
         return value
 
     def process_result_value(self, value, dialect):
-        if value is not None:
+        if value is None:
+            return []
+        else:
             value = json.loads(value)
         return value
 
@@ -157,9 +161,7 @@ for has_role in (
     'user',
     'group',
     'service',
-    'api_token',
     'oauth_client',
-    'oauth_code',
 ):
     role_map = Table(
         f'{has_role}_role_map',
@@ -185,10 +187,9 @@ class Role(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(Unicode(255), unique=True)
     description = Column(Unicode(1023))
-    scopes = Column(JSONList)
+    scopes = Column(JSONList, default=[])
     users = relationship('User', secondary='user_role_map', backref='roles')
     services = relationship('Service', secondary='service_role_map', backref='roles')
-    tokens = relationship('APIToken', secondary='api_token_role_map', backref='roles')
     groups = relationship('Group', secondary='group_role_map', backref='roles')
 
     def __repr__(self):
@@ -624,6 +625,7 @@ class APIToken(Hashed, Base):
     expires_at = Column(DateTime, default=None, nullable=True)
     last_activity = Column(DateTime)
     note = Column(Unicode(1023))
+    scopes = Column(JSONList, default=[])
 
     def __repr__(self):
         if self.user is not None:
@@ -676,9 +678,11 @@ class APIToken(Hashed, Base):
     def new(
         cls,
         token=None,
+        *,
         user=None,
         service=None,
         roles=None,
+        scopes=None,
         note='',
         generated=True,
         session_id=None,
@@ -715,19 +719,32 @@ class APIToken(Hashed, Base):
         if expires_in is not None:
             orm_token.expires_at = cls.now() + timedelta(seconds=expires_in)
 
-        db.add(orm_token)
-        if not Role.find(db, 'token'):
-            raise RuntimeError("Default token role has not been created")
-        try:
-            if roles is not None:
-                update_roles(db, entity=orm_token, roles=roles)
+        if scopes is None and roles is None:
+            # this is the default branch
+            # use the default 'token' role to specify default permissions for API tokens
+            default_token_role = Role.find(db, 'token')
+            if not default_token_role:
+                scopes = ["inherit"]
             else:
-                assign_default_roles(db, entity=orm_token)
-        except Exception:
-            db.delete(orm_token)
-            db.commit()
-            raise
+                scopes = roles_to_scopes(default_token_role)
+        elif roles is not None:
+            warnings.warn(
+                "Setting roles on tokens is deprecated in JupyterHub 2.2. Use scopes.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            orm_roles = []
+            for rolename in roles:
+                role = Role.find(db, name=rolename)
+                if role is None:
+                    raise ValueError(f"No such role: {rolename}")
+                orm_roles.append(role)
+            scopes = roles_to_scopes(*orm_roles)
 
+        _check_scopes(*scopes)
+        orm_token.scopes = list(scopes)
+
+        db.add(orm_token)
         db.commit()
         return token
 
@@ -746,7 +763,7 @@ class OAuthCode(Expiring, Base):
     # state = Column(Unicode(1023))
     user_id = Column(Integer, ForeignKey('users.id', ondelete='CASCADE'))
 
-    roles = relationship('Role', secondary='oauth_code_role_map')
+    scopes = Column(JSONList, default=[])
 
     @staticmethod
     def now():

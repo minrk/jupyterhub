@@ -10,6 +10,7 @@ from oauthlib.oauth2.rfc6749.grant_types import base
 from tornado.log import app_log
 
 from .. import orm
+from .. import roles
 from ..utils import compare_token
 from ..utils import hash_token
 
@@ -152,7 +153,7 @@ class JupyterHubRequestValidator(RequestValidator):
         )
         if orm_client is None:
             raise ValueError("No such client: %s" % client_id)
-        return [role.name for role in orm_client.allowed_roles]
+        return roles.roles_to_scopes(*orm_client.allowed_roles)
 
     def get_original_scopes(self, refresh_token, request, *args, **kwargs):
         """Get the list of scopes associated with the refresh token.
@@ -349,7 +350,7 @@ class JupyterHubRequestValidator(RequestValidator):
         orm.APIToken.new(
             client_id=client.identifier,
             expires_in=token['expires_in'],
-            roles=[rolename for rolename in request.scopes],
+            scopes=request.scopes,
             token=token['access_token'],
             session_id=request.session_id,
             user=request.user,
@@ -451,7 +452,7 @@ class JupyterHubRequestValidator(RequestValidator):
             return False
         request.user = orm_code.user
         request.session_id = orm_code.session_id
-        request.scopes = [role.name for role in orm_code.roles]
+        request.scopes = orm_code.scopes
         return True
 
     def validate_grant_type(

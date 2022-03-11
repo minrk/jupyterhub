@@ -2,6 +2,7 @@
 # Copyright (c) Jupyter Development Team.
 # Distributed under the terms of the Modified BSD License.
 import re
+import warnings
 from functools import wraps
 from itertools import chain
 
@@ -150,7 +151,8 @@ def expand_roles_to_scopes(orm_object):
     If User, take into account the user's groups roles as well
 
     Arguments:
-      orm_object: orm.User, orm.Service, orm.Group or orm.APIToken
+      orm_object: orm.User, orm.Service, orm.Group
+          Any role-having entity
 
     Returns:
       expanded scopes (set): set of all expanded scopes for the orm object
@@ -158,20 +160,29 @@ def expand_roles_to_scopes(orm_object):
     if not isinstance(orm_object, orm.Base):
         raise TypeError(f"Only orm objects allowed, got {orm_object}")
 
-    pass_roles = []
-    pass_roles.extend(orm_object.roles)
+    roles = []
+    roles.extend(orm_object.roles)
 
     if isinstance(orm_object, orm.User):
         for group in orm_object.groups:
-            pass_roles.extend(group.roles)
+            roles.extend(group.roles)
 
-    expanded_scopes = _get_subscopes(*pass_roles, owner=orm_object)
+    expanded_scopes = roles_to_expanded_scopes(*roles, owner=orm_object)
 
     return expanded_scopes
 
 
-def _get_subscopes(*roles, owner=None):
-    """Returns a set of all available subscopes for a specified role or list of roles
+def roles_to_scopes(*roles):
+    """Returns set of raw (not expanded) scopes for a collection of roles"""
+    raw_scopes = set()
+
+    for role in roles:
+        raw_scopes.update(role.scopes)
+    return raw_scopes
+
+
+def roles_to_expanded_scopes(*roles, owner=None):
+    """Returns a set of fully expanded scopes for a specified role or list of roles
 
     Arguments:
       roles (obj): orm.Roles
@@ -180,10 +191,7 @@ def _get_subscopes(*roles, owner=None):
     Returns:
       expanded scopes (set): set of all expanded scopes for the role(s)
     """
-    scopes = set()
-
-    for role in roles:
-        scopes.update(role.scopes)
+    scopes = roles_to_scopes(*roles)
 
     expanded_scopes = set(chain.from_iterable(list(map(_expand_scope, scopes))))
     # transform !user filter to !user=ownername
@@ -362,13 +370,13 @@ def grant_role(db, entity, role):
 
     if role not in entity.roles:
         entity.roles.append(role)
-        db.commit()
         app_log.info(
             'Adding role %s for %s: %s',
             role.name,
             type(entity).__name__,
             entity_repr,
         )
+        db.commit()
 
 
 @_existing_only
@@ -389,45 +397,6 @@ def strip_role(db, entity, role):
         )
 
 
-def _token_allowed_role(db, token, role):
-    """Checks if requested role for token does not grant the token
-    higher permissions than the token's owner has
-
-    Returns:
-      True if requested permissions are within the owner's permissions, False otherwise
-    """
-    owner = token.user
-    if owner is None:
-        owner = token.service
-
-    if owner is None:
-        raise ValueError(f"Owner not found for {token}")
-
-    if role in owner.roles:
-        # shortcut: token is assigned an exact role the owner has
-        return True
-
-    expanded_scopes = _get_subscopes(role, owner=owner)
-
-    implicit_permissions = {'inherit', 'read:inherit'}
-    explicit_scopes = expanded_scopes - implicit_permissions
-    # find the owner's scopes
-    expanded_owner_scopes = expand_roles_to_scopes(owner)
-    allowed_scopes = scopes._intersect_expanded_scopes(
-        explicit_scopes, expanded_owner_scopes, db
-    )
-    disallowed_scopes = explicit_scopes.difference(allowed_scopes)
-
-    if not disallowed_scopes:
-        # no scopes requested outside owner's own scopes
-        return True
-    else:
-        app_log.warning(
-            f"Token requesting role {role.name} with scopes not held by owner {owner.name}: {disallowed_scopes}"
-        )
-        return False
-
-
 def assign_default_roles(db, entity):
     """Assigns default role(s) to an entity:
 
@@ -440,54 +409,28 @@ def assign_default_roles(db, entity):
     if isinstance(entity, orm.Group):
         return
 
-    if isinstance(entity, orm.APIToken):
-        app_log.debug('Assigning default role to token')
-        default_token_role = orm.Role.find(db, 'token')
-        if not entity.roles and (entity.user or entity.service) is not None:
-            default_token_role.tokens.append(entity)
-            app_log.info('Added role %s to token %s', default_token_role.name, entity)
-            db.commit()
     # users and services all have 'user' role by default
     # and optionally 'admin' as well
+
+    kind = type(entity).__name__
+    app_log.debug(f'Assigning default role to {kind} {entity.name}')
+    if entity.admin:
+        grant_role(db, entity=entity, rolename="admin")
     else:
-        kind = type(entity).__name__
-        app_log.debug(f'Assigning default role to {kind} {entity.name}')
-        if entity.admin:
-            grant_role(db, entity=entity, rolename="admin")
-        else:
-            admin_role = orm.Role.find(db, 'admin')
-            if admin_role in entity.roles:
-                strip_role(db, entity=entity, rolename="admin")
-        if kind == "User":
-            grant_role(db, entity=entity, rolename="user")
+        admin_role = orm.Role.find(db, 'admin')
+        if admin_role in entity.roles:
+            strip_role(db, entity=entity, rolename="admin")
+    if kind == "User":
+        grant_role(db, entity=entity, rolename="user")
 
 
 def update_roles(db, entity, roles):
     """Add roles to an entity (token, user, etc.)
 
-    If it is an API token, check role permissions against token owner
-    prior to assignment to avoid permission expansion.
-
-    Otherwise, it just calls `grant_role` for each role.
+    Calls `grant_role` for each role.
     """
     for rolename in roles:
-        if isinstance(entity, orm.APIToken):
-            role = orm.Role.find(db, rolename)
-            if role:
-                app_log.debug(
-                    'Checking token permissions against requested role %s', rolename
-                )
-                if _token_allowed_role(db, entity, role):
-                    role.tokens.append(entity)
-                    app_log.info('Adding role %s to token: %s', role.name, entity)
-                else:
-                    raise ValueError(
-                        f'Requested token role {rolename} for {entity} has more permissions than the token owner'
-                    )
-            else:
-                raise KeyError(f'Role {rolename} does not exist')
-        else:
-            grant_role(db, entity=entity, rolename=rolename)
+        grant_role(db, entity=entity, rolename=rolename)
 
 
 def check_for_default_roles(db, bearer):

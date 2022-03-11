@@ -28,21 +28,33 @@
             <input type="hidden" name="scopes" value="{{ role_name }}"/>
             {% endfor %}
 
+            {%- set ns = namespace(missing_scope=false) %}
             {% for scope_info in scope_descriptions %}
+            {%- set has_scope = scope_info['has_scope'] %}
+            {%- set ns.missing_scope = ns.missing_scope or not has_scope %}
             <div class="checkbox input-group">
                 <label>
                     <input type="checkbox" name="raw-scopes" checked="true" title="This authorization is required"
                            disabled="disabled"
                            {# disabled because it's required #} />
-                    <span>
-            {{ scope_info['description'] }}
-            {% if scope_info['filter'] %}
-            Applies to {{ scope_info['filter'] }}.
-            {% endif %}
-          </span>
+                    <span class="scope-description">
+                        {% if not has_scope -%}<span class="scope-description-missing">{%- endif %}
+                        {{ scope_info['description'] }}
+                        {% if scope_info['filter'] %}
+                        Applies to {{ scope_info['filter'] }}.
+                        {% endif %}
+                        {%- if not has_scope -%}</span><span class="footnote-mark">†</span>{%- endif %}
+                    </span>
                 </label>
             </div>
             {% endfor %}
+            {% if ns.missing_scope -%}
+            <div class="scope-missing-msg">
+                <span class="footnote-mark">†</span> You do not have this permission now,
+            but if/when you do,
+            this application will be able to take this action.
+            </div>
+            {%- endif %}
             <input type="submit" value="Authorize" class="form-control btn-jupyter"/>
         </form>
     </div>

@@ -52,7 +52,7 @@ from traitlets import Unicode
 from traitlets import validate
 from traitlets.config import SingletonConfigurable
 
-from ..scopes import _intersect_expanded_scopes
+from ..scopes import intersect_expanded_scopes
 from ..utils import get_browser_protocol
 from ..utils import url_path_join
 
@@ -85,7 +85,7 @@ def check_scopes(required_scopes, scopes):
     if isinstance(required_scopes, str):
         required_scopes = {required_scopes}
 
-    intersection = _intersect_expanded_scopes(required_scopes, scopes)
+    intersection = intersect_expanded_scopes(required_scopes, scopes)
     # re-intersect with required_scopes in case the intersection
     # applies stricter filters than required_scopes declares
     # e.g. required_scopes = {'read:users'} and intersection has only {'read:users!user=x'}

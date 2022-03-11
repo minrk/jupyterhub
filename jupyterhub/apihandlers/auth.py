@@ -302,7 +302,9 @@ class OAuthAuthorizeHandler(OAuthHandler, BaseHandler):
                 raw_scopes = set(
                     itertools.chain(*(role.scopes for role in role_objects))
                 )
+
             if not raw_scopes:
+                # no scopes, can only identify the authenticated user
                 scope_descriptions = [
                     {
                         "scope": None,
@@ -313,6 +315,8 @@ class OAuthAuthorizeHandler(OAuthHandler, BaseHandler):
                     }
                 ]
             elif 'inherit' in raw_scopes:
+                # 'inherit' scope can do anything the user can do
+                # so it overrides all other scopes
                 raw_scopes = ['inherit']
                 scope_descriptions = [
                     {
@@ -324,9 +328,14 @@ class OAuthAuthorizeHandler(OAuthHandler, BaseHandler):
                     }
                 ]
             else:
+                # produce full description
                 scope_descriptions = scopes.describe_raw_scopes(
                     raw_scopes,
                     username=self.current_user.name,
+                    have_parsed_scopes=scopes.parse_scopes(
+                        scopes.get_scopes_for(self.current_user)
+                    ),
+                    db=self.db,
                 )
             # Render oauth 'Authorize application...' page
             auth_state = await self.current_user.get_auth_state()

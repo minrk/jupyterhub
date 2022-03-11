@@ -143,7 +143,7 @@ class Scope(Enum):
     ALL = True
 
 
-def _intersect_expanded_scopes(scopes_a, scopes_b, db=None):
+def intersect_expanded_scopes(scopes_a, scopes_b, db=None):
     """Intersect two sets of scopes by comparing their permissions
 
     Arguments:
@@ -157,6 +157,40 @@ def _intersect_expanded_scopes(scopes_a, scopes_b, db=None):
     Otherwise, it can result in lower than intended permissions,
           (i.e. users!group=x & users!user=y will be empty, even if user y is in group x.)
     """
+    return unparse_scopes(
+        intersect_parsed_scopes(
+            parse_scopes(scopes_a),
+            parse_scopes(scopes_b),
+            db=db,
+        )
+    )
+
+
+# backward-compat: preserve private name
+def _intersect_expanded_scopes(scopes_a, scopes_b, db=None):
+    warnings.warn(
+        "scopes._intersect_expanded_scopes is deprecated in JupyterHub 2.2. Use scopes.intersect_expanded_scopes.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return intersect_expanded_scopes(scopes_a, scopes_b, db=db)
+
+
+def intersect_parsed_scopes(parsed_scopes_a, parsed_scopes_b, db=None):
+    """Intersect two sets of parsed scopes by comparing their permissions
+
+    Arguments:
+      parsed_scopes_a, parsed_scopes_b: parsed-scopes dicts
+      db (optional): db connection for resolving group membership
+
+    Returns:
+      intersection: parsed_scope dict of all scopes held in both
+
+    If db is given, group membership will be accounted for in intersections,
+    Otherwise, it can result in lower than intended permissions,
+          (i.e. users!group=x & users!user=y will be empty, even if user y is in group x.)
+    """
+
     empty_set = frozenset()
 
     # cached lookups for group membership of users and servers
@@ -174,9 +208,6 @@ def _intersect_expanded_scopes(scopes_a, scopes_b, db=None):
         """Get set of group names for a given server"""
         username, _, servername = server.partition("/")
         return groups_for_user(username)
-
-    parsed_scopes_a = parse_scopes(scopes_a)
-    parsed_scopes_b = parse_scopes(scopes_b)
 
     common_bases = parsed_scopes_a.keys() & parsed_scopes_b.keys()
 
@@ -271,7 +302,7 @@ def _intersect_expanded_scopes(scopes_a, scopes_b, db=None):
             if common_users and "user" not in common_filters[base]:
                 common_filters[base]["user"] = common_users
 
-    return unparse_scopes(common_filters)
+    return common_filters
 
 
 def get_scopes_for(orm_object):
@@ -330,12 +361,13 @@ def get_scopes_for(orm_object):
         if 'inherit' in token_scopes:
             token_scopes.remove('inherit')
             token_scopes |= owner_scopes
-
-        intersection = _intersect_expanded_scopes(
-            token_scopes,
-            owner_scopes,
-            db=sa.inspect(orm_object).session,
-        )
+            intersection = owner_scopes
+        else:
+            intersection = intersect_expanded_scopes(
+                token_scopes,
+                owner_scopes,
+                db=sa.inspect(orm_object).session,
+            )
         discarded_token_scopes = token_scopes - intersection
 
         # Not taking symmetric difference here because token owner can naturally have more scopes than token
@@ -350,30 +382,101 @@ def get_scopes_for(orm_object):
     return expanded_scopes
 
 
-def _needs_scope_expansion(filter_, filter_value, sub_scope):
+def has_scope(scope, *, owner=None, parsed_scopes=None, db=None):
+    """Return whether a given scope is currently held in a scope set.
+
+    _either_ owner or parsed_scopes may be used to construct the currently-held scopes.
+
+    Arguments:
+        scopes (set): set of scopes to check for
+        owner: An entity to check for permissions
+        parsed_scopes (dict): parsed-scopes dictionary of scopes
+            of currently held scopes.
+            If not specified, may be derived from `owner`.
+    Returns:
+        have_scopes (bool): True if the given scope(s) are held by the owner,
+            False if not.
     """
-    Check if there is a requirements to expand the `group` scope to individual `user` scopes.
+    if owner is None and parsed_scopes is None:
+        raise ValueError("Must specify one of owner or have_scopes")
+    if owner and not db:
+        if not isinstance(owner, orm.Base):
+            from .user import User
+
+            if isinstance(owner, User):
+                owner = owner.orm_user
+            else:
+                raise TypeError(
+                    f"owner must be orm object or User wrappers, got {owner}"
+                )
+        # inspect session to get db
+        db = sa.inspect(owner).session
+
+    if parsed_scopes is None:
+        parsed_scopes = parse_scopes(get_scopes_for(owner))
+
+    to_check = parse_scopes([scope])
+    req_scope, req_filters = next(iter(to_check.items()))
+
+    if req_scope not in parsed_scopes:
+        # don't have any access to req_scope
+        return False
+
+    have_filters = parsed_scopes[req_scope]
+    if have_filters == Scope.ALL:
+        # unfiltered access
+        return True
+
+    if req_filters == Scope.ALL:
+        # requires 'all', only have filters
+        return False
+
+    # there will always be exactly one filter to check here
+    assert len(req_filters) == 1
+    filter_key, filter_value = next(iter(req_filters.items()))
+
+    if filter_key == 'user' and _needs_scope_groups(filter_value, have_filters):
+        # need to expand group membership to check if user is in a group
+        # 1. filter_key is 'user'
+        # 2. have_filters contains some groups to check
+        # 3. we don't already have explicit access to this user via a simpler '!user=filter_value'
+        group_names = have_filters['group']
+        user_name = filter_value
+        if _user_in_scope_groups(db, user_name, group_names):
+            return True
+
+    if filter_key not in have_filters:
+        return False
+
+    return have_filters[filter_key] == filter_value
+
+
+def _needs_scope_groups(user_name, have_filters):
+    """
+    Check if we need to to expand the `group` scope to individual `user` scopes.
     Assumptions:
     filter_ != Scope.ALL
+
+    Arguments
     """
-    if not (filter_ == 'user' and 'group' in sub_scope):
+    if 'group' not in have_filters:
         return False
-    if 'user' in sub_scope:
-        return filter_value not in sub_scope['user']
+    if 'user' in have_filters:
+        return user_name not in user_name['user']
     else:
         return True
 
 
-def _check_user_in_expanded_scope(handler, user_name, scope_group_names):
+def _user_in_scope_groups(db, user_name, scope_group_names):
     """Check if username is present in set of allowed groups"""
-    user = handler.find_user(user_name)
+    user = orm.User.find(db=db, name=user_name)
     if user is None:
-        raise web.HTTPError(404, "No access to resources or resources not found")
+        return False
     group_names = {group.name for group in user.groups}
     return bool(set(scope_group_names) & group_names)
 
 
-def _check_scope_access(api_handler, req_scope, **kwargs):
+def _check_scope_access(api_handler, req_scope, **req_filters):
     """Check if scopes satisfy requirements
     Returns True for (potentially restricted) access, False for refused access
     """
@@ -382,36 +485,35 @@ def _check_scope_access(api_handler, req_scope, **kwargs):
         api_name = api_handler.request.path
     except AttributeError:
         api_name = type(api_handler).__name__
-    if 'user' in kwargs and 'server' in kwargs:
-        kwargs['server'] = "{}/{}".format(kwargs['user'], kwargs['server'])
+    if 'user' in req_filters and 'server' in req_filters:
+        req_filters['server'] = "{}/{}".format(
+            req_filters['user'], req_filters['server']
+        )
+
     if req_scope not in api_handler.parsed_scopes:
         app_log.debug("No access to %s via %s", api_name, req_scope)
         return False
     if api_handler.parsed_scopes[req_scope] == Scope.ALL:
         app_log.debug("Unrestricted access to %s via %s", api_name, req_scope)
         return True
-    # Apply filters
+
     sub_scope = api_handler.parsed_scopes[req_scope]
-    if not kwargs:
+    if not req_filters:
         app_log.debug(
             "Client has restricted access to %s via %s. Internal filtering may apply",
             api_name,
             req_scope,
         )
         return True
-    for (filter_, filter_value) in kwargs.items():
-        if filter_ in sub_scope and filter_value in sub_scope[filter_]:
-            app_log.debug("Argument-based access to %s via %s", api_name, req_scope)
+
+    # Apply filters
+    for scope in unparse_scopes({req_scope: req_filters}):
+        if has_scope(scope, parsed_scopes=api_handler.parsed_scopes, db=api_handler.db):
             return True
-        if _needs_scope_expansion(filter_, filter_value, sub_scope):
-            group_names = sub_scope['group']
-            if _check_user_in_expanded_scope(api_handler, filter_value, group_names):
-                app_log.debug("Restricted client access supported with group expansion")
-                return True
     app_log.debug(
-        "Client access refused; filters do not match API endpoint %s request" % api_name
+        "Client access refused; filters do not match API endpoint %s request", api_name
     )
-    raise web.HTTPError(404, "No access to resources or resources not found")
+    return False
 
 
 def parse_scopes(scope_list):
@@ -600,7 +702,7 @@ def describe_parsed_scopes(parsed_scopes, username=None):
     return descriptions
 
 
-def describe_raw_scopes(raw_scopes, username=None):
+def describe_raw_scopes(raw_scopes, username=None, have_parsed_scopes=None, db=None):
     """Return list of descriptions of raw scopes
 
     A much shorter list than describe_parsed_scopes
@@ -608,7 +710,6 @@ def describe_raw_scopes(raw_scopes, username=None):
     descriptions = []
     for raw_scope in raw_scopes:
         scope, _, filter_ = raw_scope.partition("!")
-        base_text = scope_definitions[scope]["description"]
         if not filter_:
             # no filter
             filter_text = ""
@@ -623,11 +724,25 @@ def describe_raw_scopes(raw_scopes, username=None):
                 if kind == 'group':
                     kind_text = "users in group"
                 filter_text = f"{kind_text} {name}"
+        if have_parsed_scopes:
+            if filter_ == "user":
+                filter_ = "user={username}"
+            _raw_scope = f"{scope}{_}{filter_}"
+            parsed_scope = parse_scopes([_raw_scope])
+            has_this_scope = has_scope(
+                _raw_scope, parsed_scopes=have_parsed_scopes, db=db
+            )
+            app_log.debug(f"{has_this_scope} {_raw_scope}: {have_parsed_scopes}")
+
+        else:
+            has_this_scope = None
+
         descriptions.append(
             {
                 "scope": scope,
                 "description": scope_definitions[scope]["description"],
                 "filter": filter_text,
+                "has_scope": has_this_scope,
             }
         )
     return descriptions

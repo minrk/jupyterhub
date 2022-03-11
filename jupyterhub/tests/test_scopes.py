@@ -12,8 +12,8 @@ from .. import roles
 from .. import scopes
 from ..handlers import BaseHandler
 from ..scopes import _check_scope_access
-from ..scopes import _intersect_expanded_scopes
 from ..scopes import get_scopes_for
+from ..scopes import intersect_expanded_scopes
 from ..scopes import needs_scope
 from ..scopes import parse_scopes
 from ..scopes import Scope
@@ -849,7 +849,7 @@ async def test_roles_access(app, create_service_with_scopes, create_user_with_sc
 def test_intersect_expanded_scopes(left, right, expected, should_warn, recwarn):
     # run every test in both directions, to ensure symmetry of the inputs
     for a, b in [(left, right), (right, left)]:
-        intersection = _intersect_expanded_scopes(set(left), set(right))
+        intersection = intersect_expanded_scopes(set(left), set(right))
         assert intersection == set(expected)
 
     if should_warn:
@@ -932,7 +932,7 @@ def test_intersect_groups(request, db, left, right, expected, groups):
 
     # run every test in both directions, to ensure symmetry of the inputs
     for a, b in [(left, right), (right, left)]:
-        intersection = _intersect_expanded_scopes(set(left), set(right), db)
+        intersection = intersect_expanded_scopes(set(left), set(right), db)
         assert intersection == set(expected)
 
 

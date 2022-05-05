@@ -16,6 +16,17 @@ from .mixins import make_singleuser_app
 
 JUPYTERHUB_SINGLEUSER_APP = os.environ.get("JUPYTERHUB_SINGLEUSER_APP")
 
+# allow shortcut references
+_app_shortcuts = {
+    "notebook": "notebook.notebookapp.NotebookApp",
+    "jupyter_server": "jupyter_server.serverapp.ServerApp",
+    "jupyter-server": "jupyter_server.serverapp.ServerApp",
+    "extension": "jupyter_server.serverapp.ServerApp",
+}
+
+JUPYTERHUB_SINGLEUSER_APP = _app_shortcuts.get(
+    JUPYTERHUB_SINGLEUSER_APP, JUPYTERHUB_SINGLEUSER_APP
+)
 
 if JUPYTERHUB_SINGLEUSER_APP:
     App = import_item(JUPYTERHUB_SINGLEUSER_APP)

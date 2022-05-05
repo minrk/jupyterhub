@@ -936,11 +936,18 @@ def make_singleuser_app(App):
     log = empty_parent_app.log
 
     # detect base classes
-    LoginHandler = empty_parent_app.login_handler_class
-    LogoutHandler = empty_parent_app.logout_handler_class
+    if not getattr(empty_parent_app, "login_handler_class", None) and hasattr(
+        empty_parent_app, "identity_provider_class"
+    ):
+        has_handlers = empty_parent_app.identity_provider_class(parent=empty_parent_app)
+    else:
+        has_handlers = empty_parent_app
+    LoginHandler = has_handlers.login_handler_class
+    LogoutHandler = has_handlers.logout_handler_class
     BaseHandler = _patch_app_base_handlers(empty_parent_app)
 
     # create Handler classes from mixins + bases
+
     class JupyterHubLoginHandler(JupyterHubLoginHandlerMixin, LoginHandler):
         pass
 

@@ -63,6 +63,12 @@ def main():
         if m is not None:
             version_tuple = tuple(int(v) for v in m.groups())
             if version_tuple >= (3, 1):
-                return SingleUserLabApp.launch_instance()
+                instance_kwargs = {}
+                # if default-url env is specified,
+                # ensure it's loaded at higher priority than LabApp's default
+                default_url = os.environ.get("JUPYTERHUB_DEFAULT_URL")
+                if default_url:
+                    instance_kwargs["defaut_url"] = default_url
+                return SingleUserLabApp.launch_instance(**instance_kwargs)
 
     return SingleUserNotebookApp.launch_instance()

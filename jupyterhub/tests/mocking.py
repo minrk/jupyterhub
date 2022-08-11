@@ -37,12 +37,11 @@ from urllib.parse import urlparse
 
 from pamela import PAMError
 from tornado.ioloop import IOLoop
-from traitlets import Bool, Dict, default
+from traitlets import Any, Bool, Dict, default
 
-from .. import metrics, orm, roles
+from .. import metrics, orm, roles, singleuser
 from ..app import JupyterHub
 from ..auth import PAMAuthenticator
-from ..singleuser import SingleUserNotebookApp
 from ..spawner import SimpleLocalProcessSpawner
 from ..utils import random_port, utcnow
 from .utils import async_requests, public_host, public_url, ssl_setup
@@ -367,22 +366,55 @@ class MockHub(JupyterHub):
 
 
 # single-user-server mocking:
+if singleuser._as_extension:
+    from jupyterhub.singleuser.extension import JupyterHubSingleUser
 
+    class MockSingleUserServer(JupyterHubSingleUser):
 
-class MockSingleUserServer(SingleUserNotebookApp):
-    """Mock-out problematic parts of single-user server when run in a thread
+        _start_callback = Any()
 
-    Currently:
+        @classmethod
+        def make_serverapp(cls, **kwargs):
+            app = cls.serverapp_class(**kwargs)
 
-    - disable signal handler
-    """
+            def init_ioloop():
+                # make_current=True still needed for now
+                # jupyter-server 2.0 doesn't quite work yet without a current global loop
+                app.io_loop = IOLoop(make_current=False)
+                app.io_loop.make_current()
+                app.io_loop.add_callback(cls._start_callback, app)
 
-    def init_signal(self):
-        pass
+            app.init_ioloop = init_ioloop
+            app.log.parent = JupyterHub.instance().log
 
-    @default("log_level")
-    def _default_log_level(self):
-        return 10
+            app.init_signal = lambda: None
+            app.log_level = 10
+            return app
+
+else:
+    from ..singleuser import SingleUserNotebookApp
+
+    class MockSingleUserServer(SingleUserNotebookApp):
+        """Mock-out problematic parts of single-user server when run in a thread
+
+        Currently:
+
+        - disable signal handler
+        """
+
+        _start_callback = Any()
+
+        def init_signal(self):
+            pass
+
+        @default("log_level")
+        def _default_log_level(self):
+            return 10
+
+        def start(self):
+            if self._start_callback:
+                self.io_loop.add_callback(self._start_callback)
+            return super().start()
 
 
 class StubSingleUserSpawner(MockSpawner):
@@ -408,17 +440,25 @@ class StubSingleUserSpawner(MockSpawner):
         env = self.get_env()
         args = self.get_args()
         evt = threading.Event()
+
+        def _start_callback(app):
+            print("In start callback")
+            self._app = app
+            evt.set()
+
+        MockSingleUserServer._start_callback = _start_callback
+
         print(args, env)
 
         def _run():
             with mock.patch.dict(os.environ, env):
-                app = self._app = MockSingleUserServer()
-                app.initialize(args)
-                app.io_loop.add_callback(lambda: evt.set())
-                assert app.hub_auth.oauth_client_id
-                assert app.hub_auth.api_token
-                assert app.hub_auth.oauth_scopes
-                app.start()
+                print(env)
+                MockSingleUserServer.launch_instance(args)
+                # app.io_loop.add_callback(lambda: evt.set())
+                # assert app.hub_auth.oauth_client_id
+                # assert app.hub_auth.api_token
+                # assert app.hub_auth.oauth_scopes
+                # app.start()
 
         self._thread = threading.Thread(target=_run)
         self._thread.start()
@@ -427,7 +467,8 @@ class StubSingleUserSpawner(MockSpawner):
         return (ip, port)
 
     async def stop(self):
-        self._app.stop()
+        if hasattr(self, "_app"):
+            self._app.stop()
         self._thread.join(timeout=30)
         assert not self._thread.is_alive()
 

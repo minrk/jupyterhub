@@ -7,8 +7,10 @@ import os
 from .mixins import HubAuthenticatedHandler, make_singleuser_app
 
 if os.environ.get("JUPYTERHUB_SINGLEUSER_EXTENSION", "") not in ("", "0"):
+    _as_extension = True
     from .extension import main
 else:
+    _as_extension = False
     try:
         from .app import SingleUserNotebookApp, main
     except ImportError:

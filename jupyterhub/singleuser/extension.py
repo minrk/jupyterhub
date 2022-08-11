@@ -81,7 +81,7 @@ class JupyterHubIdentityProvider(IdentityProvider):
     @default("hub_auth")
     def _default_hub_auth(self):
         # HubAuth gets most of its config from the environment
-        return HubOAuth(parent=self, is_async=True)
+        return HubOAuth(parent=self)
 
     def _patch_get_login_url(self, handler):
         original_get_login_url = handler.get_login_url
@@ -105,13 +105,11 @@ class JupyterHubIdentityProvider(IdentityProvider):
 
         handler.get_login_url = get_login_url
 
-    def get_user(self, handler):
+    async def get_user(self, handler):
         if hasattr(handler, "_jupyterhub_user"):
             return handler._jupyterhub_user
         self._patch_get_login_url(handler)
-        # FIXME: make async after https://github.com/jupyterhub/jupyterhub/pull/3883
-        # user = await self.hub_auth.get_user(handler, sync=False)
-        user = self.hub_auth.get_user(handler)
+        user = await self.hub_auth.get_user(handler, sync=False)
         if user is None:
             handler._jupyterhub_user = None
             return None
@@ -173,7 +171,7 @@ class JupyterHubAuthorizer(Authorizer):
     @default("hub_auth")
     def _default_hub_auth(self):
         # HubAuth gets most of its config from the environment
-        return HubOAuth(parent=self, is_async=True)
+        return HubOAuth(parent=self)
 
     def is_authorized(self, handler, user, action, resource):
         # This is where we would implement granular scope checks,
@@ -229,7 +227,7 @@ class JupyterHubSingleUser(ExtensionApp):
     @default("hub_auth")
     def _default_hub_auth(self):
         # HubAuth gets most of its config from the environment
-        return HubOAuth(parent=self, is_async=True)
+        return HubOAuth(parent=self)
 
     # create dynamic default http client,
     # configured with any relevant ssl config
@@ -490,13 +488,16 @@ class JupyterHubSingleUser(ExtensionApp):
         return "/"
 
     @_fatal_errors
-    def initialize(self):
+    def initialize(self, args=None):
         # initialize takes place after
         # 1. config has been loaded
         # 2. Configurables instantiated
         # 3. serverapp.web_app set up
         super().initialize()
         app = self.serverapp
+        assert self.hub_auth.oauth_client_id
+        assert self.hub_auth.api_token
+        assert self.hub_auth.oauth_scopes
         app.web_app.settings[
             "page_config_hook"
         ] = app.identity_provider.page_config_hook

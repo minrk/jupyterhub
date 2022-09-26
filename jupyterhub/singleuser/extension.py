@@ -493,6 +493,7 @@ class JupyterHubSingleUser(ExtensionApp):
         # 1. config has been loaded
         # 2. Configurables instantiated
         # 3. serverapp.web_app set up
+
         super().initialize()
         app = self.serverapp
         assert self.hub_auth.oauth_client_id
@@ -512,37 +513,6 @@ class JupyterHubSingleUser(ExtensionApp):
 
         return serverapp
         return cls.serverapp_class.instance(**kwargs)
-
-    # BEGIN: copy initialize_server from https://github.com/jupyter-server/jupyter_server/pull/879
-    # so we can override make_serverapp above
-
-    @classmethod
-    def initialize_server(cls, argv=None, load_other_extensions=True, **kwargs):
-        """Creates an instance of ServerApp and explicitly sets
-        this extension to enabled=True (i.e. superceding disabling
-        found in other config from files).
-
-        The `launch_instance` method uses this method to initialize
-        and start a server.
-        """
-        jpserver_extensions = {cls.get_extension_package(): True}
-        find_extensions = cls.load_other_extensions
-        if "jpserver_extensions" in cls.serverapp_config:
-            jpserver_extensions.update(cls.serverapp_config["jpserver_extensions"])
-            cls.serverapp_config["jpserver_extensions"] = jpserver_extensions
-            find_extensions = False
-        serverapp = cls.make_serverapp(
-            jpserver_extensions=jpserver_extensions, **kwargs
-        )
-        serverapp.aliases.update(cls.aliases)
-        serverapp.initialize(
-            argv=argv or [],
-            starter_extension=cls.name,
-            find_extensions=find_extensions,
-        )
-        return serverapp
-
-    # END: copy initialize_server from https://github.com/jupyter-server/jupyter_server/pull/879
 
 
 main = JupyterHubSingleUser.launch_instance

@@ -227,7 +227,7 @@ def _exclude_home(path_list):
 
     Used to disable per-user configuration.
     """
-    home = os.path.expanduser('~')
+    home = os.path.expanduser('~/')
     for p in path_list:
         if not p.startswith(home):
             yield p

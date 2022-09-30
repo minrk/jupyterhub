@@ -134,7 +134,7 @@ async def test_singleuser_auth(
     assert 'burgess' in r.text
 
 
-async def test_disable_user_config(app):
+async def test_disable_user_config(request, app, tmpdir):
     # use StubSingleUserSpawner to launch a single-user app in a thread
     app.spawner_class = StubSingleUserSpawner
     app.tornado_settings['spawner_class'] = StubSingleUserSpawner
@@ -148,6 +148,16 @@ async def test_disable_user_config(app):
     # start with new config:
     user.spawner.debug = True
     user.spawner.disable_user_config = True
+    home_dir = tmpdir.join("home")
+    home_dir.mkdir()
+    # home_dir is defined on SimpleSpawner
+    user.spawner.home_dir = home = str(home_dir)
+    jupyter_config_dir = home_dir.join(".jupyter")
+    jupyter_config_dir.mkdir()
+    # verify config paths
+    with jupyter_config_dir.join("jupyter_server_config.py").open("w") as f:
+        f.write("c.TestSingleUser.jupyter_config_py = True")
+
     await user.spawn()
     await app.proxy.add_user(user)
 
@@ -160,6 +170,31 @@ async def test_disable_user_config(app):
         url_path_join('/user/nandy', user.spawner.default_url or "/tree")
     )
     assert r.status_code == 200
+
+    # set $HOME because some of these are properties,
+    # evaluated at call time rather than startup
+    with mock.patch.dict(os.environ, {"HOME": home}):
+
+        server_app = user.spawner._app
+        assert server_app.disable_user_config
+        server_config = server_app.config
+        # did not load ~/.jupyter/jupyter_server_config.py
+        assert 'TestSingleUser' not in server_config
+        import pprint
+
+        # nbclassic static paths (self.config_dir)
+        # nbclassic nbextensions path (jupyter_path, get_ipython_dir)
+
+        pprint.pprint(server_app.web_app.settings)
+        # check config paths
+        norm_home = os.path.realpath(os.path.abspath(home))
+        for path in server_app.config_file_paths:
+            path = os.path.realpath(os.path.abspath(path))
+            assert not path.startswith(norm_home + os.path.sep)
+
+    # TODO: check legacy notebook config
+    # nbextensions_path
+    # static_custom_path
 
 
 def test_help_output():

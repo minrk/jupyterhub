@@ -412,6 +412,7 @@ else:
             return 10
 
         def start(self):
+            print("in start")
             if self._start_callback:
                 self.io_loop.add_callback(self._start_callback)
             return super().start()
@@ -444,26 +445,29 @@ class StubSingleUserSpawner(MockSpawner):
         def _start_callback(app):
             print("In start callback")
             self._app = app
+            print("Config paths", app.config_file_paths, os.environ["HOME"])
             evt.set()
 
         MockSingleUserServer._start_callback = _start_callback
 
-        print(args, env)
-
         def _run():
             with mock.patch.dict(os.environ, env):
-                print(env)
+                print(dict(os.environ))
+                from traitlets.config import Application
+
+                # clear global Application instance so
+                # we can create a second instance in a thread
+                Application.clear_instance()
                 MockSingleUserServer.launch_instance(args)
-                # app.io_loop.add_callback(lambda: evt.set())
-                # assert app.hub_auth.oauth_client_id
-                # assert app.hub_auth.api_token
-                # assert app.hub_auth.oauth_scopes
-                # app.start()
 
         self._thread = threading.Thread(target=_run)
         self._thread.start()
         ready = evt.wait(timeout=3)
         assert ready
+        app = self._app
+        assert app.hub_auth.oauth_client_id
+        assert app.hub_auth.api_token
+        assert app.hub_auth.access_scopes
         return (ip, port)
 
     async def stop(self):

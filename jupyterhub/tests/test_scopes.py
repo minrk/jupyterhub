@@ -15,6 +15,7 @@ from ..scopes import (
     _check_scope_access,
     _expand_self_scope,
     _intersect_expanded_scopes,
+    _resolve_requested_scopes,
     expand_scopes,
     get_scopes_for,
     identify_scopes,
@@ -554,7 +555,9 @@ async def test_server_state_access(
             await api_request(
                 app, 'users', user.name, 'servers', server_name, method='post'
             )
-        service = create_service_with_scopes(*scopes)
+        service = create_service_with_scopes(
+            f"read:users:name!user={user.name}", *scopes
+        )
         api_token = service.new_api_token()
         headers = {'Authorization': 'token %s' % api_token}
         r = await api_request(app, 'users', user.name, headers=headers)
@@ -1200,3 +1203,88 @@ def test_expand_scopes(app, user, scopes, expected, mockservice_external):
     expanded = expand_scopes(scopes, owner=user.orm_user, oauth_client=oauth_client)
     assert isinstance(expanded, frozenset)
     assert sorted(expanded) == sorted(expected)
+
+
+@pytest.mark.parametrize(
+    "requested_scopes, have_scopes, expected_allowed, expected_excluded",
+    [
+        (
+            ["read:users:name!user"],
+            ["read:users:name!user={user}"],
+            ["read:users:name!user"],
+            [],
+        ),
+        (
+            ["read:servers!server"],
+            ["read:servers!user"],
+            ["read:servers!server"],
+            [],
+        ),
+        (
+            ["read:servers!server={server}"],
+            ["read:servers"],
+            ["read:servers!server={server}"],
+            [],
+        ),
+        (
+            ["admin:servers!server"],
+            ["read:servers"],
+            ["read:servers!server={server}"],
+            ["admin:servers!server"],
+        ),
+        (
+            ["admin:servers", "read:users"],
+            ["read:users"],
+            ["read:users"],
+            ["admin:servers"],
+        ),
+    ],
+)
+def test_resolve_requested_scopes(
+    app,
+    user,
+    group,
+    requested_scopes,
+    have_scopes,
+    expected_allowed,
+    expected_excluded,
+    mockservice_external,
+):
+    if isinstance(requested_scopes, str):
+        requested_scopes = [requested_scopes]
+
+    db = app.db
+    service = mockservice_external
+    spawner_name = "salmon"
+    server_name = f"{user.name}/{spawner_name}"
+    if '!server' in str(requested_scopes + have_scopes):
+        oauth_client = orm.OAuthClient()
+        db.add(oauth_client)
+        spawner = user.spawners[spawner_name]
+        spawner.orm_spawner.oauth_client = oauth_client
+        db.commit()
+        assert oauth_client.spawner is spawner.orm_spawner
+    else:
+        oauth_client = service.oauth_client
+        assert oauth_client is not None
+
+    def format_scopes(scopes):
+        return {
+            s.format(service=service.name, server=server_name, user=user.name)
+            for s in scopes
+        }
+
+    requested_scopes = format_scopes(requested_scopes)
+    have_scopes = format_scopes(have_scopes)
+    expected_allowed = format_scopes(expected_allowed)
+    expected_excluded = format_scopes(expected_excluded)
+
+    allowed, excluded = _resolve_requested_scopes(
+        requested_scopes,
+        have_scopes,
+        user=user.orm_user,
+        client=oauth_client,
+        db=db,
+    )
+    assert allowed == expected_allowed
+    assert excluded == expected_excluded

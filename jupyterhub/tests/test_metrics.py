@@ -1,11 +1,13 @@
 import json
+from datetime import timedelta
 from unittest import mock
 
 import pytest
 
 from jupyterhub import metrics, orm, roles
 
-from .utils import api_request, get_page
+from ..utils import utcnow
+from .utils import add_user, api_request, get_page
 
 
 async def test_total_users(app):
@@ -73,3 +75,49 @@ async def test_metrics_auth(
     else:
         assert r.status_code == 403
         assert 'read:metrics' in r.text
+
+
+async def test_active_users(db):
+    collector = metrics.PeriodicMetricsCollector(db=db)
+    collector.update()
+    now = utcnow()
+
+    for i, offset in enumerate(
+        [
+            None,
+            timedelta(hours=23, minutes=30),
+            timedelta(hours=24, minutes=1),
+            timedelta(days=6, hours=23, minutes=30),
+            timedelta(days=7, minutes=1),
+            timedelta(days=29, hours=23, minutes=30),
+            timedelta(days=30, minutes=1),
+        ]
+    ):
+        user = add_user(db, name=f"active-{i}")
+        if offset:
+            user.last_activity = now - offset
+        else:
+            user.last_activity = None
+        db.commit()
+
+    def collect():
+        samples = metrics.ACTIVE_USERS.collect()[0].samples
+        by_period = {
+            metrics.ActiveUserPeriods(sample.labels["period"]): sample.value
+            for sample in samples
+        }
+        print(by_period)
+        return by_period
+
+    # collect before update is called, all counts are zero
+    counts = collect()
+    for period in metrics.ActiveUserPeriods:
+        assert period in counts
+        assert counts[period] == 0
+
+    # collect after updates, check counts
+    collector.update()
+    counts = collect()
+    assert counts[metrics.ActiveUserPeriods.twenty_four_hours] == 1
+    assert counts[metrics.ActiveUserPeriods.seven_days] == 3
+    assert counts[metrics.ActiveUserPeriods.thirty_days] == 5

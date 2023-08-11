@@ -12,57 +12,43 @@ c.JupyterHub.custom_scopes = {
         "subscopes": ["custom:jupyter_server:read:*"],
     },
     "custom:jupyter_server:execute:*": {
-        "description": "Execute permissions on servers.",
+        "description": "Full permissions on servers, including execution.",
         "subscopes": [
             "custom:jupyter_server:write:*",
             "custom:jupyter_server:read:*",
         ],
+    },
+    "custom:jupyter_server:read:api": {
+        "description": "Read permissions on single-user /api/status endpoint",
     },
 }
 
 c.JupyterHub.load_roles = [
     # grant specific users read-only access to all servers
     {
-        "name": "read-only-all",
+        "name": "status-only-all",
         "scopes": [
             "access:servers",
-            "custom:jupyter_server:read:*",
+            "custom:jupyter_server:read:api",
         ],
-        "groups": ["read-only"],
-    },
-    {
-        "name": "read-only-read-only-percy",
-        "scopes": [
-            "access:servers!user=percy",
-            "custom:jupyter_server:read:*!user=percy",
-        ],
-        "users": ["vex"],
-    },
-    {
-        "name": "admin-ui",
-        "scopes": [
-            "admin-ui",
-            "list:users",
-            "admin:servers",
-        ],
-        "users": ["admin"],
-    },
-    {
-        "name": "full-access",
-        "scopes": [
-            "access:servers",
-            "custom:jupyter_server:execute:*",
-        ],
-        "users": ["minrk"],
+        "services": ["status-check"],
     },
     # all users have full access to their own servers
+    # execute permissions are now required to _do_ anything with a server,
+    # as granular permissions have been enabled
     {
         "name": "user",
         "scopes": [
             "custom:jupyter_server:execute:*!user",
-            "custom:jupyter_server:read:*!user",
             "self",
         ],
+    },
+]
+
+c.JupyterHub.services = [
+    {
+        "name": "status-check",
+        "api_token": "abc123secret",
     },
 ]
 

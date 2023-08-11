@@ -1,4 +1,17 @@
-# Granting read-only access to user servers
+# Granting limited access to user servers
+
+Extends read-only example in JupyterHub repo to
+
+1. (as in read-only example), jupyter-server config enables `GranularJupyterHubAuthorizer`, which extracts scopes from JupyterHub of the form `custom:jupyter_server:action:resource` for use by the Jupyter Server Authorizer API (accepting `*` for wildcard matches on resources).
+2. add specific scope `custom:jupyter_server:read:api` for `read` on the `api` resource,
+   which grants read access to the `/api/` and `/api/status` endpoints.
+3. grant this permission to a service via the `status-only-all` role
+4. associate an API token with this service via `JupyterHub.services`
+
+Then you can make requests to any running server's `/api/status`.
+If you add the `list:users` and `read:servers` scopes, you can list servers to check first
+
+Original description below:
 
 Jupyter Server 2.0 adds the ability to enforce granular permissions via its Authorizer API.
 Combining this with JupyterHub's custom scopes and singleuser-server extension, you can use JupyterHub to grant users restricted (e.g. read-only) access to each others' servers,

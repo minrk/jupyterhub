@@ -232,10 +232,60 @@ for s in ActiveUserPeriods:
     ACTIVE_USERS.labels(period=s.value)
 
 
+def _prometheus_log_scale(start, end, include_inf=True):
+    """Generate the prometheus log scale
+
+    uniform distribution per power of 10:
+
+    1, 2.5, 5, 7.5, 10, 25, 50, 75, ...
+
+    Must start at a power of 10, e.g. 1, 0.1, etc.
+    """
+    value = start
+    # check power of 10
+    if f"{start:e}"[0] != "1":
+        raise ValueError(f"start must be a power of 10 (1eN), not {start!r}")
+    while value < end:
+        yield value
+        yield value * 2.5
+        yield value * 5
+        yield value * 7.5
+        # next log scale
+        value *= 10
+    # include end value
+    yield value
+    if include_inf:
+        yield float("inf")
+
+
 EVENT_LOOP_INTERVAL_SECONDS = Histogram(
     'event_loop_interval_seconds',
     'Distribution of measured event loop intervals',
     namespace=metrics_prefix,
+    # increase resolution to 5ms below 50ms
+    # because this is where we are most sensitive
+    buckets=[
+        2.5e-3,
+    ]
+    # 5ms resolution from 5-25
+    + [1e-3 * n for n in range(5, 26, 5)]
+    # 10ms from 30-50
+    + [1e-3 * n for n in range(30, 51, 10)]
+    # from here, default prometheus buckets
+    + [75e-3]
+    + list(_prometheus_log_scale(0.1, 10))
+        75e-3,
+        0.1,
+        0.25,
+        0.5,
+        0.75,
+        1,
+        2.5,
+        5,
+        7.5,
+        10,
+        float("inf"),
+    ],
 )
 
 

@@ -814,7 +814,9 @@ class BaseHandler(RequestHandler):
             self.log.warning("Disallowing redirect outside JupyterHub: %r", next_url)
             next_url = ''
 
-        return next_url
+        # CodeQL can't tell that we've been rigorous in validating next_url
+        # so self-certify
+        return next_url  # noqa
 
     def get_next_url(self, user=None, default=None):
         """Get the next_url for login redirect

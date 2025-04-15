@@ -1601,7 +1601,7 @@ class PrefixRedirectHandler(BaseHandler):
             redirect_url = urlunparse(public_url._replace(path=redirect_path))
         elif subdomain_host:
             redirect_url = url_path_join(subdomain_host, redirect_path)
-        self.redirect(redirect_url, permanent=False)
+        self.redirect(redirect_url, permanent=False)  # noqa
 
 
 class UserUrlHandler(BaseHandler):

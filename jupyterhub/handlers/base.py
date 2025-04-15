@@ -827,7 +827,7 @@ class BaseHandler(RequestHandler):
         - else: /hub/home
         """
         next_url = self.get_argument('next', default='')
-        next_url = self._validate_next_url(next_url)
+        next_url = self._validate_next_url(next_url)  # noqa
 
         # this is where we know if next_url is coming from ?next= param or we are using a default url
         if next_url:

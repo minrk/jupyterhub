@@ -34,9 +34,7 @@ from subprocess import TimeoutExpired
 from unittest import mock
 from warnings import warn
 
-import pytest_asyncio
-from packaging.version import parse as parse_version
-from pytest import fixture, mark, raises
+from pytest import fixture, raises
 from sqlalchemy import event
 from tornado.httpclient import HTTPError
 from tornado.platform.asyncio import AsyncIOMainLoop
@@ -60,41 +58,6 @@ from .utils import add_user
 
 # global db session object
 _db = None
-
-_pytest_asyncio_24 = parse_version(pytest_asyncio.__version__) >= parse_version(
-    "0.24.0.dev0"
-)
-
-
-def pytest_collection_modifyitems(items):
-    if _pytest_asyncio_24:
-        # apply loop_scope="module" to all async tests by default
-        # this is only for pytest_asyncio >= 0.24
-        # pytest_asyncio < 0.24 uses overridden `event_loop` fixture
-        # this can be hopefully be removed in favor of config if
-        # https://github.com/pytest-dev/pytest-asyncio/issues/793
-        # is addressed
-        pytest_asyncio_tests = (
-            item for item in items if pytest_asyncio.is_async_test(item)
-        )
-        asyncio_scope_marker = mark.asyncio(loop_scope="module")
-        for async_test in pytest_asyncio_tests:
-            # add asyncio marker _if_ not already present
-            asyncio_marker = async_test.get_closest_marker('asyncio')
-            if not asyncio_marker or not asyncio_marker.kwargs:
-                async_test.add_marker(asyncio_scope_marker, append=False)
-
-
-if not _pytest_asyncio_24:
-    # pre-pytest-asyncio 0.24, overriding event_loop fixture
-    # was the way to change scope of event_loop
-    # post-0.24 uses modifyitems above
-    @fixture(scope='module')
-    def event_loop(request):
-        """Same as pytest-asyncio.event_loop, but re-scoped to module-level"""
-        event_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(event_loop)
-        return event_loop
 
 
 @fixture(scope='module', autouse=True)

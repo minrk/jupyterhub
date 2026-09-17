@@ -421,7 +421,7 @@ class BaseHandler(RequestHandler):
         if not auth_info:
             # refresh failed, what do we do?
             # if it's a cookie-authenticated, we can force a fresh login
-            # if it's token-authenticated OR the request is another user, we can't.
+            # if it's token-authenticated OR the request is made by another user, we can't.
             # In these cases, keep using the stale auth until the user makes a cookie-authenticated request.
 
             if self._jupyterhub_user is user and (not self._token_authenticated):

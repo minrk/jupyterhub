@@ -100,7 +100,7 @@ class Authenticator(LoggingConfigurable):
         - admin spawn of other users' servers
 
         If a user's auth state is stale and cannot be refreshed (e.g. missing or outdated oauth token),
-        these actions cannot be taken until the user logs in again.
+        the user must log in again before these actions can be taken.
 
         Since auth state is unlikely to be invalid, forcing a refresh when it cannot be refreshed
         is often counterproductive.

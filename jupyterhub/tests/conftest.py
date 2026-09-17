@@ -97,9 +97,18 @@ if not _pytest_asyncio_24:
         return event_loop
 
 
+@fixture(scope='module', autouse=True)
+def tmp_cwd(tmp_path_factory, request):
+    # avoid contamination with cwd by always running tests in a tempdir
+    cwd = os.getcwd()
+    os.chdir(tmp_path_factory.mktemp(f"cwd-{request.node.path.stem}"))
+    yield
+    os.chdir(cwd)
+
+
 @fixture(scope='module')
-def ssl_tmpdir(tmpdir_factory):
-    return tmpdir_factory.mktemp('ssl')
+def ssl_tmpdir(tmp_path_factory, request):
+    return tmp_path_factory.mktemp(f"ssl-{request.node.path.stem}")
 
 
 @fixture(scope='module')

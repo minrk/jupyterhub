@@ -109,9 +109,9 @@ class Authenticator(LoggingConfigurable):
         in which case admin spawns for other users, or even API requests from users' own servers
         will fail until the user completes a fresh login.
 
-        .. versionadded:: 6.0
-            Prior to 6.0, the behavior was the same as `Authenticator.auth_refresh_strict = True`.
-            6.0 adds this configuration and makes it False by default,
+        .. versionadded:: 6.1
+            Prior to 6.1, the behavior was the same as `Authenticator.auth_refresh_strict = True`.
+            6.1 adds this configuration and makes it False by default,
             due to the problems seen when it is True.
         """,
     )

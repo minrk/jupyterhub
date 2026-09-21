@@ -11,7 +11,7 @@ But this raises the question:
 > What is activity?
 
 and the answer can be complex.
-We want to answer a few questions here.
+We want to answer a few questions.
 
 For admins:
 
@@ -21,7 +21,18 @@ For admins:
 
 For users:
 
-- How can I ensure my server _doesn't_ get shut down, if I'm doing something that doesn't look like typical interactive work?
+- How can I ensure my server _doesn't_ get shut down, especially if I'm doing something that doesn't look like typical interactive work?
+
+A few keywords that we will use throughout:
+
+active
+: has had some 'activity' over a period of time (deployment-defined)
+
+idle/inactive
+: not active (a server is always either active or idle)
+
+cull
+: shut down a server (or kernel or other resource) that has become idle
 
 ## Sources of activity
 
@@ -35,7 +46,7 @@ and server activity is a lot trickier to define because it depends on a number o
 
 The first source of activity on a server is the proxy.
 The default proxy (configurable-http-proxy) tracks _any_ network activity to a server.
-That's any network request, any websocket message, etc.
+That's any network request, any websocket message, etc. _through the proxy_ (i.e. not internal requests between JupyterHub components).
 
 Tracking network traffic activity is a feature of configurable-http-proxy (JupyterHub's default, used by the jupyterhub helm chart), and not shared by the the [Traefik proxy implementation](https://jupyterhub-traefik-proxy.readthedocs.io/), which is used by [The Littlest JupyterHub](https://tljh.jupyter.org/).
 
@@ -44,11 +55,11 @@ Using any network traffic as activity is a blunt instrument, but it is also one 
 _However_.
 
 In a lot of cases, an application like JupyterLab or RStudio makes polling requests that mean there's always traffic if it's open, even if there's no human there doing anything.
-That typically means that leaving a tab open is often enough to keep a server active,
+That means leaving a tab open is often enough to keep a server active,
 much to the frustration of their JupyterHub admins and those paying for hosting.
 
 ```{note}
-JupyterLab makes a substantial effort to disable polling when the tab is not _focused_ (i.e. you are not looking at it), specifically to avoid a long-forgotten tab making continuous requests to the server.
+JupyterLab is designed to disable polling when the tab is not _focused_ (i.e. you are not looking at it), specifically to avoid a long-forgotten tab making continuous requests to the server.
 However, not all JupyterLab _Extensions_ follow this behavior.
 If you see JupyterLab or an Extension consistently polling requests in logs while it not focused, please report it as a bug to the package making the requests.
 ```
@@ -95,12 +106,6 @@ but informs Jupyter Server's own "shutdown if there's no activity" behavior.
 
 API requests to a Jupyter Server can be made with `?no_track_activity=1` to prevent updating `last_activity`.
 This is useful if you have a tool or service that might poll the server for something and don't want it to be treated as keeping it active.
-
-### Keeping servers alive
-
-[jupyter-keepalive](https://github.com/minrk/jupyter-keepalive) is an Extension that relies on Jupyter Server's extensible last_activity sources which provides a mechanism for users to ensure that a server will be considered 'active' for some interval.
-This avoids the need to try to somehow trigger other forms of activity to keep a server alive,
-such as running a pointless execution or leaving a browser open overnight.
 
 ### Kernel activity
 
@@ -240,3 +245,44 @@ In combination with Kernel and other activity tracking,
 when there are no terminals and no kernels running (e.g. culled by above configuration),
 and no API requests or other Extension activity registered within this timeout,
 the server will shut itself down.
+
+## Troubleshooting
+
+### Why is this idle server _not_ getting culled?
+
+A server that you think should be idle that is staying 'active' is the most common issue.
+The main thing to check here is what is the source of 'activity'.
+The useful logs for this are:
+
+- the server's logs, look for any requests that are happening when a server is known to be 'idle'
+- the proxy's logs. This usually requires enabling debug logging, because the proxy does not log every request
+- the hub's logs, especially for `200 POST /hub/api/users/USERNAME/activity`
+
+Debug logging may be necessary to get a full picture.
+Once you've identified what requests are triggering the activity, you can start the process of trying to either prevent those requests, or prevent those requests from counting toward activity.
+
+### How do I enable _only_ internal activity?
+
+As discussed above, you may want to try to disable the proxy's activity tracking and rely only on Jupyter Server's internal activity tracking.
+
+To disable proxy activity tracking, add to your JupyterHub config:
+
+```python
+c.JupyterHub.last_activity_interval = 0
+```
+
+Then the only source of activity will be the requests to `/hub/api/users/.../activity` coming from user servers.
+
+### Why is my server getting culled?
+
+If your server is getting shut down when you don't want it do, the question to ask is: what are you doing that _should_ be registered as activity?
+It could be that your deployment has set a max age (usually in hours), and no amount of activity will keep it alive.
+It could be that the idle timeout is too short, and doesn't tolerate you sitting and reading and thinking.
+These are tuning parameters in the deployment, and often aren't easy for users to work around.
+
+#### Keeping a server alive
+
+If you have started a long-running task that you want to keep going, there are a lot of ways to try to fake activity, but the best is probably to be explicit about keeping your server alive.
+[jupyter-keepalive](https://github.com/minrk/jupyter-keepalive) is an Extension that relies on Jupyter Server's extensible last_activity sources which provides a mechanism for users to ensure that a server will be considered 'active' for some interval.
+This avoids the need to try to somehow trigger other forms of activity to keep a server alive,
+such as running a pointless execution or leaving a browser open overnight.

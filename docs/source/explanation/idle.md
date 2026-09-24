@@ -3,14 +3,14 @@
 # JupyterHub and idleness
 
 JupyterHub tracks a `last_activity` field on users and servers whenever it notices "activity".
-This field is an ISO8601 timestamp indicating the last time there was 'activity' by that user or on that server.
+This field is an ISO8601 timestamp indicating the last time there was "activity" by that user or on that server.
 These can be simply informative metrics (they show up in the admin UI and REST API), but are also meant to inform a measure of "idleness" which can be used to make decisions like shutting down servers that haven't been used in some time, to avoid deployments paying for unused resources.
 
 But this raises the question:
 
 > What is activity?
 
-and the answer can be complex.
+The answer can be complex.
 We want to answer a few questions.
 
 For admins:
@@ -26,10 +26,10 @@ For users:
 A few keywords that we will use throughout:
 
 active
-: has had some 'activity' over a period of time (deployment-defined)
+: has had some "activity" over a period of time (deployment-defined)
 
 idle/inactive
-: not active (a server is always either active or idle)
+: not active (a server is always either active or idle/inactive)
 
 cull
 : shut down a server (or kernel or other resource) that has become idle
@@ -48,7 +48,7 @@ The first source of activity on a server is the proxy.
 The default proxy (configurable-http-proxy) tracks _any_ network activity to a server.
 That's any network request, any websocket message, etc. _through the proxy_ (i.e. not internal requests between JupyterHub components).
 
-Tracking network traffic activity is a feature of configurable-http-proxy (JupyterHub's default, used by the jupyterhub helm chart), and not shared by the the [Traefik proxy implementation](https://jupyterhub-traefik-proxy.readthedocs.io/), which is used by [The Littlest JupyterHub](https://tljh.jupyter.org/).
+Tracking network traffic activity is a feature of configurable-http-proxy (JupyterHub's default, used by the [jupyterhub helm chart](https://github.com/jupyterhub/zero-to-jupyterhub-k8s)), and not shared by the [Traefik proxy implementation](https://jupyterhub-traefik-proxy.readthedocs.io/), which is used by [The Littlest JupyterHub](https://tljh.jupyter.org/).
 
 Using any network traffic as activity is a blunt instrument, but it is also one that is clearly defined and reliable: if any client is talking to your server, there's a good chance it is being used.
 
@@ -84,11 +84,11 @@ Proxy activity tracking is a blunt instrument, but it is at least simple and wel
 ## Activity in the server
 
 Jupyter Server tracks activity itself, and because Jupyter Server knows what each request _means_, it can make more fine-grained decisions about what counts as activity and when to shut things down.
-It can also track internal state when there are no requests happening, to enable a server to identify itself as 'active'
+It can also track internal state when there are no requests happening, to enable a server to identify itself as "active"
 without interactions.
 
-The short summary is that the Server will report activity on any API, kernel, or terminal to JupyterHub.
-It _can_ shut itself down if it considers itself inactive, but this is disabled by default and will not occur if there is any 'activity', including if any kernels or terminals are running, even if they are idle.
+In summary, the Jupyter Server will report activity on any API, kernel, or terminal to JupyterHub.
+It _can_ shut itself down if it considers itself inactive, but this is disabled by default and will not occur if there is any "activity", including if any kernels or terminals are running, even if they are idle.
 
 Jupyter Server tracks _multiple_ sources of activity, and reports them to JupyterHub every `$JUPYTERHUB_ACTIVITY_INTERVAL` seconds (default: 300).
 Like with network activity, make sure to set your last activity reporting interval to be short enough relative to your culling interval and timeout.
@@ -101,7 +101,7 @@ Jupyter Server Extensions have the ability to track activity and report to Jupyt
 Any timestamp written to `self.settings[*_last_activity]` will be considered,
 and whatever the latest timestamp will be reported to JupyterHub as the last activity for the server.
 
-Extensions also have a `current_activity` indicator which is a boolean that _doesn't_ update the 'last_activity' timestamp,
+Extensions also have a `current_activity` indicator which is a boolean that _doesn't_ update the `last_activity` timestamp,
 but informs Jupyter Server's own "shutdown if there's no activity" behavior.
 
 API requests to a Jupyter Server can be made with `?no_track_activity=1` to prevent updating `last_activity`.
@@ -115,7 +115,7 @@ Jupyter Server manages _kernels_ and can cull _them_ based on inactivity.
 Kernels have 3 kinds of activity to consider:
 
 - kernel message events
-- is the kernel 'busy' processing a message?
+- is the kernel "busy" processing a message?
 - are any clients currently connected to the kernel (i.e. is a notebook open)?
 
 Sources of kernel activity:
@@ -126,7 +126,7 @@ Sources of kernel activity:
 
 ### Configuring kernel activity
 
-Jupyter Server's [MappingKernelManager](inv:jupyter-server#*.MappingKernelManager) defines some options for configuring how kernels are considered 'idle' and available for culling.
+Jupyter Server's [MappingKernelManager](inv:jupyter-server#*.MappingKernelManager) defines some options for configuring how kernels are considered "idle" and available for culling.
 
 The defaults are conservative (in fact, the default is to entirely disable culling), because prematurely culling user kernels can result in lost work.
 A kernel is only considered idle if none of the following are true:
@@ -138,14 +138,14 @@ A kernel is only considered idle if none of the following are true:
 You can tune these to suit your needs via options on `MappingKernelManager` in your `jupyter_server_config` in the user environment (i.e. _not_ JupyterHub configuration).
 
 - [cull_idle_timeout](inv:jupyter-server:py#*.MappingKernelManager.cull_idle_timeout) specifies the timeout (in seconds) at which to consider a kernel idle. If left unset, culling of kernels is entirely disabled.
-- [cull_interval](inv:jupyter-server:py#*.MappingKernelManager.cull_idle_timeout) specifies the interval (in seconds) on which to check for idle kernels to cull
+- [cull_interval](inv:jupyter-server:py#*.MappingKernelManager.cull_interval) specifies the interval (in seconds) on which to check for idle kernels to cull
 - [cull_connected](inv:jupyter-server:py#*.MappingKernelManager.cull_connected) specifies whether idle kernels with active connections should be considered for culling
 - [cull_busy](inv:jupyter-server:py#*.MappingKernelManager.cull_busy) specifies whether a kernel in the middle of processing a request will be considered for culling
 - [untracked_message_types](inv:jupyter-server:py#*.MappingKernelManager.untracked_message_types) specifies which messages to consider activity.
   By default, whenever a kernel processes a message from the client (such as an execution or introspection),
   it will be treated as activity.
 
-busy and connected kernels, if they are not producing message events, do _not_ contribute to the overall `last_activity`.
+Busy and connected kernels, if they are not producing message events, do _not_ contribute to the overall `last_activity`.
 Those signals are only taken into account by the server's internal kernel culler.
 
 Tips for more aggressive culling:
@@ -184,7 +184,7 @@ c.ServerProxy.servers = {
 ```
 
 Starting with jupyter-server-proxy 4.6, you can further control _which_ proxied requests count as activity,
-by specifying [](inv:jupyter-server-proxy:std:doc#server-process) as a list of URL patterns (regular expressions) to exclude from contributing to the last_activity metric:
+by specifying [](inv:jupyter-server-proxy:std:doc#server-process) as a list of URL patterns (regular expressions) to exclude from contributing to the `last_activity` metric:
 
 ```python
 c.ServerProxy.servers = {
@@ -250,7 +250,7 @@ the server will shut itself down.
 
 ### Why is this idle server _not_ getting culled?
 
-A server that you think should be idle that is staying 'active' is the most common issue.
+The most common issue is a server that you think should be idle and a candidate for culling is staying 'active'.
 The main thing to check here is what is the source of 'activity'.
 The useful logs for this are:
 
@@ -278,7 +278,7 @@ Then the only source of activity will be the requests to `/hub/api/users/.../act
 If your server is getting shut down when you don't want it do, the question to ask is: what are you doing that _should_ be registered as activity?
 It could be that your deployment has set a max age (usually in hours), and no amount of activity will keep it alive.
 It could be that the idle timeout is too short, and doesn't tolerate you sitting and reading and thinking.
-These are tuning parameters in the deployment, and often aren't easy for users to work around.
+These are tuning parameters in the deployment, and often aren't easy for users to work around. Contact your administrator for more information.
 
 #### Keeping a server alive
 
